@@ -44,10 +44,11 @@
  *       the project itself, to hand on or keep (see projectFiles): its work always, the parts asked besides; a zip
  *       holding the project's folder, or the folder itself, opened as a project like any other
  *
- * Any of them but the project also takes `range: [from, to]` (seconds; not stills, posters, slides or nle) and `label` (how the
- * person's list names it); those with a picture (not one clip alone) take `burnSubtitles: true`, the subtitles drawn
- * into the picture as the editor shows them (captions.mjs: the cues and the person's style). `folder`: an absolute
- * path (or ~/…) to write to instead of the exports folder.
+ * Any of them but the project also takes `range: [from, to]` (seconds; not stills, posters, slides or nle) and `label`
+ * (how the person's list names it); any of them takes `name` (what the file is called; the project's own when there is
+ * none); those with a picture (not one clip alone) take `burnSubtitles: true`, the subtitles drawn into the picture as
+ * the editor shows them (captions.mjs: the cues and the person's style). `folder`: an absolute path (or ~/…) to write
+ * to instead of the exports folder.
  */
 import { execFile, fork, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -94,7 +95,7 @@ export { exportsRoot };
  * @typedef {{ kind: 'project', parts?: ProjectPart[], as?: 'zip' | 'folder' }} ProjectAsk
  * @typedef {typeof PROJECT_PARTS[number]} ProjectPart
  * @typedef {VideoAsk | GifAsk | AudioAsk | StillsAsk | PosterAsk | SubtitlesAsk | SlidesAsk | NleAsk | ProjectAsk} ExportSpec
- * @typedef {ExportSpec & { range?: [number, number], label?: string }} ExportAsk
+ * @typedef {ExportSpec & { range?: [number, number], label?: string, name?: string }} ExportAsk
  * @typedef {import('./film-subtitle.mjs').FilmSubtitleCue} Cue
  * @typedef {import('./film-subtitle.mjs').FilmSubtitleStyle} SubtitleStyle
  * @typedef {'preparing' | 'audio' | 'rendering' | 'encoding' | 'copying' | 'finishing'} ExportPhase
@@ -219,14 +220,18 @@ const SOUND_CODECS = /** @type {Record<string, string[]>} */ ({ wav: ['-c:a', 'p
 
 /** What a file of this ask is called, before its extension. @param {string} project @param {ExportAsk} ask */
 function baseName(project, ask) {
-  const base = safeName(project);
-  const range = ask.range ? ` ${ask.range[0]}-${ask.range[1]}s` : '';
+  /* a name typed at export time wins over the project's: a named file keeps the suffixes that tell the files of one
+     export apart (a platform, alpha, stills) and loses the ones that only describe the project (a size, a range) */
+  const named = typeof ask.name === 'string' && ask.name.trim() ? safeName(ask.name) : null;
+  const base = named ?? safeName(project);
+  const range = !named && ask.range ? ` ${ask.range[0]}-${ask.range[1]}s` : '';
   switch (ask.kind) {
     case 'video': {
       if (ask.preset) return `${base} · ${safeName(ask.preset)}${range}`;
       const alpha = ALPHA_CODECS.has(ask.codec ?? 'h264');
       if (ask.clip) return `${base} · ${safeName(ask.clip)}${alpha ? ' (alpha)' : ''}`;
       if (alpha) return `${base} (alpha)${range}`;
+      if (named) return base;
       const frame = ask.frame && ask.frame !== 'native' ? ` ${ask.frame.replace(':', 'x')}` : '';
       return `${base}${frame}${ask.shortEdge ? ` ${ask.shortEdge}p` : ''}${range}`;
     }
@@ -252,6 +257,7 @@ function checked(/** @type {ExportAsk} */ ask) {
     throw new ExportError('a range is [from, to] in seconds, to after from');
   }
   if (ask.label !== undefined && (typeof ask.label !== 'string' || ask.label.length > 120)) throw new ExportError('label: text, at most 120 characters');
+  if (ask.name !== undefined && (typeof ask.name !== 'string' || ask.name.length > 120)) throw new ExportError('name: text, at most 120 characters');
   if ('frame' in ask && ask.frame !== undefined && ask.frame !== 'native' && frameRatio(ask.frame) == null) throw new ExportError('frame: native, or a ratio W:H from 1:4 to 4:1 (16:9, 2.39:1)');
   if ('fill' in ask && ask.fill !== undefined && ask.fill !== 'contain' && ask.fill !== 'cover') throw new ExportError('fill: contain or cover');
   if ('shortEdge' in ask && !between(ask.shortEdge, 64, MAX_DIM)) throw new ExportError(`shortEdge: 64 to ${MAX_DIM} pixels`);
@@ -1227,13 +1233,13 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
   }
 
   /**
-   * The project itself (see projectFiles): a zip holding its folder, or the folder, under the project's name. Copied
-   * a piece at a time, so its footage can be any size; a link to a file is copied as the file.
+   * The project itself (see projectFiles): a zip holding its folder, or the folder, under the name asked for or else
+   * the project's. Copied a piece at a time, so its footage can be any size; a link to a file is copied as the file.
    * @param {ExportJob} job @param {string} root @param {string} dir @param {AbortSignal} signal
    */
   async function exportProject(job, root, dir, signal) {
     const ask = /** @type {ProjectAsk} */ (job.ask);
-    const title = safeName(job.name);
+    const title = baseName(job.name, ask);
     const files = await projectFiles(root, ask.parts ?? [], resolve(dir));
     const total = Math.max(1, files.reduce((n, f) => n + f.size, 0));
     let told = 0;

@@ -261,6 +261,10 @@ export function ExportCenter(props: ExportCenterProps) {
   const [nleSourceFps, setNleSourceFps] = React.useState<number | null>(null);
   /** The folder being typed after "Change…" (null when not editing). */
   const [folderDraft, setFolderDraft] = React.useState<string | null>(null);
+  /** What the files are called, as typed here: the project's name to begin with, and when left empty. */
+  const [exportName, setExportName] = React.useState<string>('');
+  /** Whether that name was typed over: only then is it sent, so a dialog left alone exports as it always did. */
+  const [nameTyped, setNameTyped] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
@@ -272,6 +276,9 @@ export function ExportCenter(props: ExportCenterProps) {
     setResult(null);
     setWorking(null);
     setFolderDraft(null);
+    /* a name is this export's, not a setting: each visit starts from the project's own */
+    setExportName(props.title);
+    setNameTyped(false);
     setRange((r) => ({ ...r, on: false }));
     void listExports(props.projectId).then((r) => { setCan(r.can); setDraftApps({ jianying: Boolean(r.drafts?.jianying), capcut: Boolean(r.drafts?.capcut) }); setDefaultFolder(r.folder); setCaptionCount(r.subtitles ?? 0); setProjectSizes(r.project ?? null); }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -505,7 +512,11 @@ export function ExportCenter(props: ExportCenterProps) {
     }
     setWorking(t('exportCenter.queueing'));
     try {
-      const queued = await startExports(props.projectId, jobs, s.folder || undefined);
+      /* the name typed here, unless there is none or its field is hidden (a draft is named by its app): every way out
+         of this screen comes through here */
+      const typed = nameTyped && !toDrafts ? exportName.trim() : '';
+      const named = typed ? jobs.map((job) => ({ ...job, name: typed })) : jobs;
+      const queued = await startExports(props.projectId, named, s.folder || undefined);
       props.onQueued?.(queued);
       onClose();
     } catch (e) {
@@ -1166,6 +1177,24 @@ export function ExportCenter(props: ExportCenterProps) {
                   <span className="truncate text-[11px] text-[var(--text-faint)] group-hover:text-[var(--text-muted)]">{t('exportCenter.change')}</span>
                 </span>
               </button>
+            )}
+            {/* what the files are called: the project's own name unless typed over (a draft is named by its app) */}
+            {!toDrafts && (
+              <label className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0 text-[11px] text-[var(--text-faint)]">{t('exportCenter.fileName')}</span>
+                <input
+                  value={exportName}
+                  spellCheck={false}
+                  placeholder={props.title}
+                  aria-label={t('exportCenter.fileName')}
+                  onChange={(e) => { setExportName(e.target.value); setNameTyped(true); }}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing && !disabled) { e.preventDefault(); void queue(requests); }
+                  }}
+                  className="h-10 w-[220px] min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-[13px] text-[var(--text)] outline-none focus:border-[var(--text-faint)]"
+                />
+              </label>
             )}
             <div className="ml-auto flex min-w-0 items-center gap-4">
               <div className="min-w-0 text-right text-[12px] leading-snug">

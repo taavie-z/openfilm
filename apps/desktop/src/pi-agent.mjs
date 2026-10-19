@@ -17,7 +17,7 @@
  * since the request before.
  *
  * What Pi does goes to the chat as ACP session updates: its words and thinking as they stream, each tool call (its
- * kind, title and input) and its result, and after each answer how full the context is.
+ * kind, title and input) and its result, after each answer how full the context is, and a model service tried again.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -26,7 +26,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import { DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, createAgentSession } from '@earendil-works/pi-coding-agent';
 import { Agent, install, setGlobalDispatcher } from 'undici';
 import { agentSessionsDir, openLog } from './chat-store.mjs';
-import { THINKING, WAIT_MINUTES, contextUsed, effortOption, modelOption, modelsJson, providerOf, stopReason, toolCall, toolContent } from './pi-config.mjs';
+import { THINKING, WAIT_MINUTES, contextUsed, effortOption, modelOption, modelsJson, providerOf, retryNotice, stopReason, toolCall, toolContent } from './pi-config.mjs';
 
 /* stdout is the protocol's: anything else Pi or a library prints goes to stderr */
 console.log = console.info = console.warn = console.debug = (...args) => process.stderr.write(`${args.map(String).join(' ')}\n`);
@@ -185,6 +185,10 @@ async function open(client, cwd, resumeId) {
       case 'tool_execution_end':
         send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: event.isError ? 'failed' : 'completed',
           content: toolContent(event.result), rawOutput: event.result?.content?.filter?.((b) => b?.type === 'text').map((b) => b.text).join('\n') ?? '' });
+        break;
+      case 'auto_retry_start':
+        /* the service failed or sent nothing in time, and Pi tries again: the chat says so (nothing once it answers) */
+        send(retryNotice(event));
         break;
       case 'compaction_end':
         /* Pi could not make room for the conversation: the turn ends on that (its last answer may not say it) */

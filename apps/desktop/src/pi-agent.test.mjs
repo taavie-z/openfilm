@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { AgentSession } from './agents.mjs';
 
 /** A service on the Chat Completions API that answers "ok" and notes the model each request named (and each request, and its key). */
-async function service({ broke = false, fails = null } = {}) {
+async function service({ broke = false, fails = null, busyOnce = false } = {}) {
   const asked = [];
   const bodies = [];
   const keys = [];
@@ -20,6 +20,7 @@ async function service({ broke = false, fails = null } = {}) {
       bodies.push(JSON.parse(body || '{}'));
       keys.push(String(req.headers.authorization ?? ''));
       if (broke) { res.writeHead(402, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'Insufficient Balance' } })); return; }
+      if (busyOnce && asked.length === 1) { res.writeHead(503, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'The service is busy.' } })); return; }
       if (fails) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: fails } })); return; }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const chunk = (choice, extra = {}) => `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model, choices: [choice], ...extra })}\n\n`;
@@ -167,6 +168,30 @@ test('a conversation too long for the model says so, and where its context is se
     const error = await session.prompt([{ type: 'text', text: 'hi' }]).then(() => null, (e) => e);
     assert.equal(error?.message, "The conversation is too long for the model. The model's context may be smaller than set in Settings: lower it there.");
     assert.match(error.data?.details ?? '', /maximum context length is 1000 tokens/, 'what the service said goes too');
+  } finally {
+    session.close();
+    svc.close();
+  }
+});
+
+test('a service that fails and is tried again says so in the chat as a notice, and the turn goes on', { timeout: 60_000 }, async () => {
+  const svc = await service({ busyOnce: true });
+  const updates = [];
+  const session = new AgentSession({
+    agent: 'byok',
+    cwd: mkdtempSync(join(tmpdir(), 'of-pi-')),
+    harness: { home: mkdtempSync(join(tmpdir(), 'of-pi-home-')), models: [own('a', svc.url)], model: 'a', env: { OPENFILM_BYOK_KEY_a: 'sk' } },
+    onUpdate: (update) => updates.push(update),
+  });
+  try {
+    await session.start();
+    assert.equal(await session.prompt([{ type: 'text', text: 'hi' }]), 'end_turn');
+    assert.equal(svc.asked.length, 2, 'asked twice');
+    const notices = updates.filter((u) => u.sessionUpdate === 'notice');
+    assert.equal(notices.length, 1, 'one notice, and none once it answers');
+    assert.equal(notices[0].severity, 'warning');
+    assert.equal(notices[0].title, 'The model service failed; trying again (1 of 1).');
+    assert.match(notices[0].description, /The service is busy/);
   } finally {
     session.close();
     svc.close();

@@ -401,6 +401,7 @@ export const es: Words = {
     rangeFrom: 'Desde',
     rangeTo: 'Hasta',
     saveTo: 'Guardar en',
+    fileName: 'Nombre',
     change: 'Cambiar…',
     pickTitle: 'Elige dónde guardar las exportaciones',
     pickButton: 'Elegir',

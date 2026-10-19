@@ -168,6 +168,17 @@ export function failureText(said) {
   return text;
 }
 
+/**
+ * Pi trying a model service again after it failed (its `auto_retry_start`), as the notice the chat shows: a service that
+ * sent nothing in time in plain words, anything else with Pi's own.
+ */
+export function retryNotice(event) {
+  const said = String(event?.errorMessage ?? '').trim();
+  const again = `trying again (${event?.attempt ?? 1} of ${event?.maxAttempts ?? 1}).`;
+  if (TIMED_OUT.test(said)) return { sessionUpdate: 'notice', severity: 'warning', title: `The model service didn't answer for ${WAIT_MINUTES} minutes; ${again}` };
+  return { sessionUpdate: 'notice', severity: 'warning', title: `The model service failed; ${again}`, ...(said ? { description: said } : {}) };
+}
+
 /** How full the context is after an answer (ACP usage_update): what the conversation takes, of the model's window. */
 export function contextUsed(message, model) {
   const u = message?.usage;

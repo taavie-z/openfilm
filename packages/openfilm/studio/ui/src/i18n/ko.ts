@@ -401,6 +401,7 @@ export const ko: Words = {
     rangeFrom: '시작',
     rangeTo: '끝',
     saveTo: '저장 위치',
+    fileName: '이름',
     change: '변경…',
     pickTitle: '내보내기 저장 위치 선택',
     pickButton: '선택',

@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { getPriority, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encoders, hardwareEncoder } from './encoders.mjs';
 import { filmHtml } from './film-doc.mjs';
-import { defaultWorkers, machine, render } from './render.mjs';
+import { defaultWorkers, machine, outOfMemory, render } from './render.mjs';
 
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
@@ -46,6 +46,32 @@ test('an encoder that fails to start fails the render with ffmpeg\'s error, inst
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a failed encode is the error told, even when its parts folder cannot be removed', { skip: (!hasFfmpeg && 'no ffmpeg') || (process.platform === 'win32' && 'no read-only folders') || (process.getuid?.() === 0 && 'root removes anything'), timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-held-'));
+  /* the folder this render encodes its parts in, made read-only with a file in it: as Windows holds the files of an
+     encoder still exiting, the folder cannot be removed */
+  const work = join(dir, '.film', 'cache', 'render', `.parts-${process.pid}`);
+  try {
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><body><script>window.film = { duration: 1, width: 320, height: 180, frame() {} };</script>');
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, 'held'), '');
+    chmodSync(work, 0o555);
+    await assert.rejects(render([dir], { out: join(dir, 'out.mp4'), workers: 1, onProgress() {}, format: { video: ['-c:v', 'no_such_encoder'] } }), /^Error: ffmpeg: .*no_such_encoder/);
+  } finally {
+    chmodSync(work, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an encoder out of memory is said plainly, with fewer browsers to try', () => {
+  const x264 = new Error('ffmpeg: x264 [error]: malloc of size 6220800 failed\nError while opening encoder');
+  assert.match(outOfMemory(x264, 5).message, /^ffmpeg ran out of memory with 5 browsers rendering at once: try fewer, for example --workers 2\nffmpeg: x264/);
+  assert.match(outOfMemory(new Error('ffmpeg: exit 3221225495'), 2).message, /--workers 1\n/, 'Windows ended it for lack of memory');
+  assert.match(outOfMemory(x264, 1).message, /^ffmpeg ran out of memory: close other apps and try again\n/);
+  const other = new Error('ffmpeg: Unknown encoder');
+  assert.equal(outOfMemory(other, 5), other, 'any other error is told as it is');
 });
 
 test('browsers: one per performance core but one, as many as the free memory holds with room to spare, enough frames each, at most four', () => {

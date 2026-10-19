@@ -401,6 +401,7 @@ export const ja: Words = {
     rangeFrom: '開始',
     rangeTo: '終了',
     saveTo: '保存先',
+    fileName: '名前',
     change: '変更…',
     pickTitle: '書き出しの保存先を選択',
     pickButton: '選択',

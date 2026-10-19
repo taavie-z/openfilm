@@ -8,8 +8,9 @@ import type { ExportQuality, ExportVideoCodec } from '@/lib/export-spec';
 /** `burnSubtitles`: the film's subtitles drawn into the picture, as the editor shows them. */
 type Framing = { frame?: FilmFrameId; fill?: FilmFrameFill; burnSubtitles?: boolean };
 
-/** One export, as the server takes it. `range` is [from, to] in seconds. */
-export type ExportRequest = { range?: [number, number]; label?: string } & (
+/** One export, as the server takes it. `range` is [from, to] in seconds; `name` is what its files are called (the
+ * project's name when there is none). */
+export type ExportRequest = { range?: [number, number]; label?: string; name?: string } & (
   | (Framing & { kind: 'video'; codec: ExportVideoCodec; shortEdge?: number; fps: number; quality: ExportQuality; audio: boolean;
     clip?: string; scale?: number; preset?: string; sidecar?: 'srt' | 'vtt' })
   | (Framing & { kind: 'gif'; width: number; fps: number })

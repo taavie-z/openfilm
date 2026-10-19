@@ -36,13 +36,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PI_APIS, contextLength, modelEffort } from './pi-config.mjs';
 
-/** The person's own agents, as agents.mjs AGENTS has them. */
-export const OWN_AGENT_IDS = Object.freeze(['codex', 'claude', 'copilot', 'cursor', 'opencode', 'codebuddy', 'qwen', 'kimi', 'minimax']);
-export const AGENT_IDS = Object.freeze([...OWN_AGENT_IDS, 'byok']);
-export const AGENT_NAMES = Object.freeze({
-  codex: 'Codex', claude: 'Claude Code', copilot: 'GitHub Copilot', cursor: 'Cursor', opencode: 'OpenCode', codebuddy: 'CodeBuddy',
-  qwen: 'Qwen Code', kimi: 'Kimi', minimax: 'MiniMax Code', byok: 'Own key',
-});
+import { AGENT_DEFINITIONS, AGENT_IDS, OWN_AGENT_IDS, isAgentId } from './agent-definitions.mjs';
+export { AGENT_IDS, OWN_AGENT_IDS } from './agent-definitions.mjs';
+export const AGENT_NAMES = Object.freeze(Object.fromEntries(AGENT_IDS.map((id) => [id, AGENT_DEFINITIONS[id].name])));
 const isOwn = (id) => OWN_AGENT_IDS.includes(id);
 
 /** The API formats a key can be for, and the address each starts with. */
@@ -83,7 +79,7 @@ export function readChoices(dataDir) {
   for (const id of OWN_AGENT_IDS) if (typeof raw.paths?.[id] === 'string' && raw.paths[id]) paths[id] = raw.paths[id];
   return {
     shown,
-    disconnected: Array.isArray(raw.disconnected) ? raw.disconnected.filter((id) => AGENT_IDS.includes(id)) : [...DEFAULT_DISCONNECTED],
+    disconnected: Array.isArray(raw.disconnected) ? raw.disconnected.filter((id) => isAgentId(id)) : [...DEFAULT_DISCONNECTED],
     byok,
     paths,
   };
@@ -247,7 +243,7 @@ export function createRoster(deps) {
   function list() {
     return AGENT_IDS.map((id) => ({
       id,
-      name: AGENT_NAMES[id],
+      name: AGENT_DEFINITIONS[id].name,
       shown: choices.shown[id] ?? false,
       ...stateOf(id),
       ...(live.errors[id] ? { error: live.errors[id] } : {}),
@@ -294,7 +290,7 @@ export function createRoster(deps) {
 
     /** Connect: back on here; its own sign-in when it needs one. */
     async connect(id) {
-      if (!AGENT_IDS.includes(id)) return { ok: false, error: `No agent ${id}` };
+      if (!isAgentId(id)) return { ok: false, error: `No agent ${id}` };
       delete live.errors[id];
       /* connecting one is choosing it: it is shown in the chat (and among the person's agents in Settings) */
       save({ ...choices, shown: { ...choices.shown, [id]: true }, disconnected: choices.disconnected.filter((a) => a !== id) });
@@ -319,7 +315,7 @@ export function createRoster(deps) {
 
     /** Disconnect here only: its sessions close; its own sign-in stays as it is (connecting again uses it as it is then). */
     disconnect(id) {
-      if (!AGENT_IDS.includes(id)) return;
+      if (!isAgentId(id)) return;
       delete live.waiting[id];
       deps.closeSessions(id);
       save({ ...choices, disconnected: [...new Set([...choices.disconnected, id])] });
@@ -366,7 +362,7 @@ export function createRoster(deps) {
     },
 
     setShown(id, shown) {
-      if (!AGENT_IDS.includes(id)) return;
+      if (!isAgentId(id)) return;
       save({ ...choices, shown: { ...choices.shown, [id]: shown === true } });
     },
 

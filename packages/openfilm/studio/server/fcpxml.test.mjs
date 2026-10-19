@@ -115,6 +115,28 @@ test('FCPXML includes editable subtitle titles above pictures, clipped to the se
   assert.doesNotMatch(fcpxmlDocument(timeline), /<title |<effect /);
 });
 
+test('subtitle titles keep their relative size and white outlined text across sequence resolutions', () => {
+  for (const [width, height, fontSize, shadowOffset, shadowBlurRadius] of [
+    [320, 180, 48, '2.4 270', 21.12],
+    [1920, 1080, 48, '2.4 270', 21.12],
+    [3840, 2160, 48, '2.4 270', 21.12],
+    [360, 640, 27, '1.35 270', 11.88],
+    [1080, 1920, 27, '1.35 270', 11.88],
+    [1080, 1080, 48, '2.4 270', 21.12],
+  ]) {
+    const xml = fcpxmlDocument({ ...timeline, width, height }, { cues: [{ startMs: 0, durMs: 1000, text: 'Subtitle' }] });
+    const style = xml.match(/<text-style font=[^>]+/)?.[0];
+    assert.ok(style);
+    assert.equal(Number(style.match(/fontSize="([^"]+)"/)?.[1]), fontSize, `${width}×${height}`);
+    assert.match(style, /fontColor="1 1 1 1"/);
+    assert.match(style, /strokeColor="0 0 0 1"/);
+    assert.match(style, /shadowColor="0 0 0 0.72"/);
+    assert.equal(style.match(/shadowOffset="([^"]+)"/)?.[1], shadowOffset);
+    assert.equal(Number(style.match(/shadowBlurRadius="([^"]+)"/)?.[1]), shadowBlurRadius);
+    assert.equal(Number(style.match(/strokeWidth="([^"]+)"/)?.[1]), -2, 'negative stroke width keeps both fill and outline');
+  }
+});
+
 test('subtitle titles on an audio-only timeline omit empty cues and end at the next subtitle', () => {
   const xml = fcpxmlDocument({ ...timeline, rate: nleRate(25), video: [], audio: [] }, { cues: [
     { startMs: 1000, durMs: 1000, text: 'Second' },

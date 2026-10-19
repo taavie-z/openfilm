@@ -402,6 +402,7 @@ export const zhCN: Words = {
     rangeFrom: '起点',
     rangeTo: '终点',
     saveTo: '保存到',
+    fileName: '名称',
     change: '更改…',
     pickTitle: '选择导出的保存位置',
     pickButton: '选择',

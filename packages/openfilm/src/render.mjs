@@ -46,6 +46,22 @@ async function chipFormat(ext, size, fps) {
 /** The encoder a format's picture options name. @param {string[] | undefined} video */
 const encoderOf = (video = []) => video[video.indexOf('-c:v') + 1] ?? 'ffmpeg';
 
+/** What an encoder out of memory says: x264's failed malloc, ffmpeg's ENOMEM, or Windows ending it (STATUS_NO_MEMORY). */
+const OUT_OF_MEMORY = /malloc of size \d+ failed|cannot allocate memory|out of memory|exit 3221225495\b/i;
+
+/**
+ * An encode's error, said plainly when the encoder ran out of memory: each browser feeds an encoder of its own, so
+ * fewer browsers is what helps. Any other error as it is.
+ * @param {unknown} e @param {number} workers
+ */
+export function outOfMemory(e, workers) {
+  if (!(e instanceof Error) || !OUT_OF_MEMORY.test(e.message)) return e;
+  const said = workers > 1
+    ? `ffmpeg ran out of memory with ${workers} browsers rendering at once: try fewer, for example --workers ${Math.floor(workers / 2)}`
+    : 'ffmpeg ran out of memory: close other apps and try again';
+  return new Error(`${said}\n${e.message}`, { cause: e });
+}
+
 export async function render(args, opts = {}) {
   const started = Date.now();
   const { film: target, at, range } = parseTarget(args);
@@ -152,7 +168,7 @@ export async function render(args, opts = {}) {
       } catch (e) {
         stop.abort();
         await Promise.allSettled(runs);
-        throw e;
+        throw outOfMemory(e, parts.length);
       } finally {
         opts.signal?.removeEventListener('abort', quit);
       }
@@ -187,8 +203,9 @@ export async function render(args, opts = {}) {
       await ffmpeg(['-i', video, '-c', 'copy', ...format.tag, ...(extname(out) === '.mp4' ? ['-movflags', '+faststart'] : []), out]).done;
     }
   } finally {
-    /* Windows lets go of a file a moment after ffmpeg exits */
-    rmSync(work, { recursive: true, force: true, maxRetries: 5 });
+    /* Windows lets go of a file a moment after ffmpeg exits, and later still after one that failed: a folder it
+       still holds is left behind rather than told in place of what went wrong */
+    try { rmSync(work, { recursive: true, force: true, maxRetries: 5 }); } catch {}
     await Promise.allSettled(browsers.map((b) => b.close()));
     await probe.close();
   }

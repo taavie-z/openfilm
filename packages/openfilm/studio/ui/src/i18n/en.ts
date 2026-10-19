@@ -402,6 +402,7 @@ export const en = {
     rangeFrom: 'From',
     rangeTo: 'To',
     saveTo: 'Save to',
+    fileName: 'Name',
     change: 'Change…',
     pickTitle: 'Choose where to save exports',
     pickButton: 'Choose',
