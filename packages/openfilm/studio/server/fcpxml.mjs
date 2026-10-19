@@ -135,7 +135,8 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
     parent.children.push(...clipXml(clip, { ...placement, kind: 'video' }));
   }
   const subtitleCues = filmSubtitleCuesInRange(cues, 0, timeline.durationFrames / rate.fps * 1000);
-  const fontSize = decimal(Math.min(width, height) * 48 / 1080);
+  // Basic Title scales its 1080-high template to the sequence; only compensate for portrait aspect ratios here.
+  const fontSize = decimal(48 * Math.min(width, height) / height);
   let titleCount = 0;
   for (const { cue, end } of filmSubtitleSequence(subtitleCues)) {
     const span = frameSpan(cue.startMs / 1000, end / 1000, rate);
@@ -152,7 +153,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
       `              <title ${attrs.join(' ')}>`,
       `                <text><text-style ref="${styleId}">${xmlEscape(filmSubtitleText(cue))}</text-style></text>`,
       `                <text-style-def id="${styleId}">`,
-      `                  <text-style font="Helvetica" fontSize="${fontSize}" fontColor="1 1 1 1" strokeColor="0 0 0 1" strokeWidth="2" alignment="center"/>`,
+      `                  <text-style font="Helvetica" fontSize="${fontSize}" fontColor="1 1 1 1" strokeWidth="0" shadowColor="0 0 0 0.85" shadowOffset="1 315" shadowBlurRadius="2" alignment="center"/>`,
       '                </text-style-def>',
       '                <adjust-transform position="0 -40"/>',
       '              </title>',

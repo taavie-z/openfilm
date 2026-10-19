@@ -115,6 +115,17 @@ test('FCPXML includes editable subtitle titles above pictures, clipped to the se
   assert.doesNotMatch(fcpxmlDocument(timeline), /<title |<effect /);
 });
 
+test('subtitle typography uses the title template space across resolutions and aspect ratios', () => {
+  const cues = [{ startMs: 100, durMs: 650, text: 'Hello & <world> — 导出比较' }];
+  for (const [width, height, size] of [[320, 180, 48], [1920, 1080, 48], [3840, 2160, 48], [1080, 1920, 27], [360, 640, 27], [1080, 1080, 48]]) {
+    const xml = fcpxmlDocument({ ...timeline, width, height }, { cues });
+    assert.match(xml, new RegExp(`fontSize="${size}"`), `${width}×${height}: FCP scales the 1080-high title template itself`);
+    assert.doesNotMatch(xml, /strokeColor=|strokeWidth="[1-9]/, 'an imported outline obscures the white letter faces');
+    assert.match(xml, /shadowColor="0 0 0 0.85"[^>]*shadowBlurRadius="2"/);
+    assert.match(xml, /<adjust-transform position="0 -40"\/>/);
+  }
+});
+
 test('subtitle titles on an audio-only timeline omit empty cues and end at the next subtitle', () => {
   const xml = fcpxmlDocument({ ...timeline, rate: nleRate(25), video: [], audio: [] }, { cues: [
     { startMs: 1000, durMs: 1000, text: 'Second' },
