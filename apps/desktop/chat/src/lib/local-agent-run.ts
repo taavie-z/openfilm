@@ -833,7 +833,7 @@ export async function runLocalAgentTurn({
   const sessionKey = `${projectId}:${conversation}:${agent}`;
   let session = sessions.get(sessionKey);
   if (!session || session.cwd !== cwd) {
-    const started = await bridge.start(agent, cwd, resume);
+    const started = await bridge.start(agent, cwd, resume, meta);
     if (!started.ok) {
       throw Object.assign(new Error(started.error), { code: started.code, install: started.install });
     }

@@ -4,10 +4,11 @@
  *   · codex, claude, copilot, cursor, opencode, codebuddy, qwen, kimi, minimax — the person's own agents (agents.mjs):
  *     Codex, Claude Code, GitHub Copilot, Cursor, OpenCode, CodeBuddy, Qwen Code, Kimi and MiniMax Code. Each uses
  *     the account signed in on the computer as it is: connecting opens Terminal for its own sign-in command only when
- *     it is signed out, disconnecting only stops OpenFilm using it, and connecting again uses whichever account is
- *     signed in then (one switched in the agent or its maker's app). `account` says whose it is. Codex and Claude Code
- *     are shown in the chat's menu from the start; the others once the person connects one or switches it on. Codex is
- *     connected from the start, Claude Code once the person connects it.
+ *     it is signed out (never Codex's: it is signed in in Codex, so one found is connected), disconnecting only stops
+ *     OpenFilm using it, and connecting again uses whichever account is signed in then (one switched in the agent or
+ *     its maker's app). `account` says whose it is. Codex and Claude Code are shown in the chat's menu from the start;
+ *     the others once the person connects one or switches it on. Codex is connected from the start, Claude Code once
+ *     the person connects it.
  *   · byok — the app's own agent (Pi, pi-agent.mjs) on the person's own models, each set up on its own: the name the
  *     chat's menu shows, its service (an address on a standard API in one of three formats: the OpenAI Responses API
  *     (…/v1/responses), the OpenAI Chat Completions API (…/v1/chat/completions) or the Anthropic Messages API

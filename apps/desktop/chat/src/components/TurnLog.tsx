@@ -487,6 +487,11 @@ function updateRow(event: LogEvent, titles: Map<string, string>): Omit<Row, 'at'
   }
 }
 
+/** A start or a turn that failed: why, the step it stopped at, and the last the agent wrote to stderr. */
+function failed(event: LogEvent): string {
+  return `${str(event.error, 500)}${event.step ? `  · ${str(event.step)}` : ''}${event.stderr ? `  · ${str(String(event.stderr).trim().split('\n').slice(-3).join(' | '), 300)}` : ''}`;
+}
+
 function rowOf(event: LogEvent, titles: Map<string, string>): Omit<Row, 'at' | 'events'> {
   switch (event.kind) {
     case 'prompt': {
@@ -504,7 +509,8 @@ function rowOf(event: LogEvent, titles: Map<string, string>): Omit<Row, 'at' | '
     case 'cancel': return { kind: 'end', label: 'cancel', summary: '' };
     case 'set-option': return { kind: 'update', label: 'set option', summary: `${str(event.configId)} = ${str(event.value)}`, tone: 'quiet' };
     case 'exit': return { kind: 'end', label: 'exit', summary: `code ${str(event.code)}${event.stderr ? `  ${str(event.stderr, 300)}` : ''}`, tone: event.code ? 'error' : undefined };
-    case 'done': return { kind: 'end', label: 'done', summary: event.ok ? str(event.stopReason) : str(event.error, 500), tone: event.ok ? undefined : 'error' };
+    case 'start': return { kind: 'end', label: 'start', summary: failed(event), tone: 'error' };
+    case 'done': return { kind: 'end', label: 'done', summary: event.ok ? str(event.stopReason) : failed(event), tone: event.ok ? undefined : 'error' };
     default: return { kind: 'update', label: event.kind, summary: str(event, 300), tone: 'quiet' };
   }
 }

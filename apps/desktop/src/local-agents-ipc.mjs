@@ -98,6 +98,16 @@ function imageBlocks(images) {
 }
 
 /**
+ * The error as the agent sent it (ACP's code, message and data), under any rewording on the way (errorCause,
+ * explainFailure), for the turn log; null when it sent none.
+ */
+export function sentError(e) {
+  let asSent = e;
+  while (asSent?.cause) asSent = asSent.cause;
+  return typeof asSent?.code === 'number' ? { code: asSent.code, message: asSent.message, data: asSent.data ?? null } : null;
+}
+
+/**
  * An agent that did not start, did not answer, or whose process ended by itself, as Studio's problems keep it
  * (openfilm's problems.mjs): why, the step it stopped at, its program, the last of its stderr, and where its turn's log
  * is.
@@ -219,6 +229,8 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
     const agent = opts?.agent;
     const cwd = opts?.cwd;
     const resume = typeof opts?.resume === 'string' && opts.resume ? opts.resume : null;
+    /* the turn it starts for: a start that fails is written in that turn's log, as a prompt that fails is */
+    const meta = opts?.meta && typeof opts.meta === 'object' ? opts.meta : null;
     if (!isChatAgent(agent)) return { ok: false, error: `Unknown agent: ${String(agent)}` };
     if (typeof cwd !== 'string' || !cwd) return { ok: false, error: 'Missing project folder.' };
     /* the conversation still open here (the page was reloaded): taken up as it is, no second process */
@@ -272,10 +284,17 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
       entry.info = info;
       return { ok: true, key, info: { ...info, authMethods: [], mcp: false } };
     } catch (e) {
+      const result = { ok: false, error: e instanceof Error ? e.message : String(e), ...(e?.code ? { code: String(e.code) } : {}) };
+      if (meta?.turnId) {
+        const raw = sentError(e);
+        const file = openLog(cwd, meta.turnId, (err) => log(`turn log ${meta.turnId}: ${err.message}\n`));
+        file?.write('start', { ...result, agent, cwd, resume, meta, ...(raw ? { raw } : {}), ...entry.session?.failure?.() });
+        file?.end();
+      }
       /* one not installed, or not set up, is not a problem of the app's: the chat says what to do */
-      if (e?.code !== 'not-installed' && e?.code !== 'not-ready') noteProblem(entry, 'start', e);
+      if (e?.code !== 'not-installed' && e?.code !== 'not-ready') noteProblem(entry, 'start', e, meta?.turnId ?? null);
       close(key);
-      return { ok: false, error: e instanceof Error ? e.message : String(e), ...(e?.code ? { code: String(e.code) } : {}) };
+      return result;
     }
   });
 
@@ -306,8 +325,7 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
     } catch (e) {
       /* `balance`: the service the app's own agent runs on has no balance left (agents.mjs), and where to top it up */
       result = { ok: false, error: e instanceof Error ? e.message : String(e), ...(e?.balance ? { balance: e.balance } : {}) };
-      const asSent = e?.cause ?? e;
-      if (typeof asSent?.code === 'number') raw = { code: asSent.code, message: asSent.message, data: asSent.data ?? null };
+      raw = sentError(e);
       if (!e?.balance) noteProblem(entry, 'prompt', e, meta?.turnId ?? null);
     } finally {
       activePrompts--;
@@ -316,8 +334,9 @@ export function registerLocalAgentIpc(ipcMain, { trusted, binDir = null, fallbac
     }
     entry.lastUsed = Date.now();
     if (turn) {
-      /* a turn that failed: what the agent's process last wrote to stderr says why */
-      turn.file.write('done', result.ok ? result : { ...result, ...(raw ? { raw } : {}), stderr: String(entry.session?.stderr ?? '').slice(-8000) });
+      /* a turn that failed: the error as the agent sent it, the step it stopped at, its program and what its process
+         last wrote to stderr say why */
+      turn.file.write('done', result.ok ? result : { ...result, ...(raw ? { raw } : {}), ...entry.session?.failure?.() });
       turn.file.end();
       turn.done = result;
       entry.turnEnded = Date.now();

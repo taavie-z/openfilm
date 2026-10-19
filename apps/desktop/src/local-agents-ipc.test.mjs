@@ -1,7 +1,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { agentProblem } from './local-agents-ipc.mjs';
+import { readLog } from './chat-store.mjs';
+import { agentProblem, registerLocalAgentIpc, sentError } from './local-agents-ipc.mjs';
+
+test("a start that fails is written in the log of the turn it was for, with why", async () => {
+  const handlers = new Map();
+  registerLocalAgentIpc({ handle: (channel, fn) => handlers.set(channel, fn) }, { trusted: () => true });
+  const project = mkdtempSync(join(tmpdir(), 'openfilm-ipc-'));
+  const event = { sender: { once() {}, isDestroyed: () => false, send() {} } };
+  /* the own key with no models set up: refused before anything starts */
+  const r = await handlers.get('desktop:local-agents:start')(event, { agent: 'byok', cwd: project, meta: { turnId: 'local:startfail1' } });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'not-ready');
+  await new Promise((done) => setTimeout(done, 50));
+  const start = readLog(project, 'local:startfail1')?.events.find((e) => e.kind === 'start');
+  assert.ok(start, 'the turn has a log');
+  assert.equal(start.ok, false);
+  assert.equal(start.error, r.error);
+  assert.equal(start.agent, 'byok');
+  assert.equal(start.meta.turnId, 'local:startfail1');
+});
 
 test('an agent that failed, as its problem is kept: its name, why, the step, the last of its stderr and its turn\'s log', () => {
   const session = { stderr: 'a\nb\nc\nd\ne\nError: write EPIPE\n' };
@@ -16,4 +37,11 @@ test('an agent that failed, as its problem is kept: its name, why, the step, the
     area: 'agent', agent: 'Codex', agentId: 'codex', what: 'Internal error', step: 'session/new', project: '/p/Film', program: '/x/codex', ownLogs: '/h/.codex',
   });
   assert.equal(agentProblem({ agent: 'byok', cwd: '/p' }, 'start', 'no models').agent, 'Own key');
+});
+
+test('the error as the agent sent it, under any rewording on the way; none when it sent none', () => {
+  const sent = Object.assign(new Error('Internal error'), { code: -32603, data: { details: 'stream closed' } });
+  const reworded = new Error('Codex stopped while answering without saying why.', { cause: new Error('stream closed', { cause: sent }) });
+  assert.deepEqual(sentError(reworded), { code: -32603, message: 'Internal error', data: { details: 'stream closed' } });
+  assert.equal(sentError(new Error('not installed')), null);
 });

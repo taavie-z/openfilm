@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld } from './agents.mjs';
+import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason } from './agents.mjs';
 
 test('an agent that asks: yes for good where it offers that, else yes this once; nothing to say yes with is null', () => {
   const options = [
@@ -66,6 +66,36 @@ test('an error the agent sends as "Internal error" carries its reason; a sign-in
   const plain = new Error('Codex process has exited with code 1');
   assert.equal(signInError('Codex', plain), plain);
   assert.equal(signInError('Codex', Object.assign(new Error('Authentication required'), { code: -32000 })).code, 'sign-in');
+  const own = signInError('Codex', Object.assign(new Error('Authentication required'), { code: -32000 }), { own: true });
+  assert.equal(own.code, 'sign-in');
+  assert.equal(own.message, 'Codex is not signed in. Sign in in Codex, then try again.');
+});
+
+test('Codex is signed in in Codex: one found is never signed out here, and keeps whose account it is', () => {
+  assert.equal(AGENTS.codex.login, null);
+  assert.deepEqual(ownSignIn(AGENTS.codex, { signedIn: false, account: null }), { signedIn: null, account: null });
+  const account = { method: 'chatgpt' };
+  assert.deepEqual(ownSignIn(AGENTS.codex, { signedIn: true, account }), { signedIn: true, account });
+  assert.deepEqual(ownSignIn(AGENTS.claude, { signedIn: false, account: null }), { signedIn: false, account: null });
+});
+
+test("the model service's refusal Codex sends as its reply fails the turn; a model this Codex is too old for says to update it", () => {
+  const chunk = (text) => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+  const said = `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."}}\n\n`;
+  const refused = codexServiceError(chunk(said));
+  assert.deepEqual(refused, { message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 });
+  assert.equal(codexServiceError(chunk('Hi!')), null);
+  assert.equal(codexServiceError(chunk('{"type":"error"')), null, 'not JSON');
+  assert.equal(codexServiceError(chunk('{"type":"error","error":{}}')), null, 'no message');
+  assert.equal(codexServiceError({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: said } }), null);
+
+  const old = codexRefusal(refused, '/usr/local/bin/codex', () => '0.156.1');
+  assert.equal(old.code, 'outdated');
+  assert.equal(old.message, "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account. Update Codex (this one is 0.156.1), or choose another model.");
+  assert.match(codexRefusal(refused, '/usr/local/bin/codex', () => null).message, / Update Codex, or choose another model\.$/);
+  const other = codexRefusal({ message: 'Rate limit reached.', status: 429 }, '/usr/local/bin/codex', () => '0.163.0');
+  assert.equal(other.message, 'Rate limit reached.');
+  assert.equal(other.code, undefined);
 });
 
 test('a turn the agent ends with just "Internal error" says the reason in its data; the error as sent stays its cause', () => {
@@ -201,6 +231,10 @@ test('a refusal about the plan is the agent\'s own words; one about the sign-in 
     '403 Your current subscription does not have access to Kimi Code right now. Upgrade your plan to keep coding with Kimi Code: https://www.kimi.com/code/#pricing');
   assert.equal(planProblem('Authentication required: Use Qwen Code CLI to authenticate first.'), null);
   assert.equal(planProblem('Authentication required'), null);
+  /* one signed in in its own program is told the same about its plan */
+  const plan = signInError('Codex', Object.assign(new Error('Authentication required: 403 Your plan does not include this model.'), { code: -32000 }), { own: true });
+  assert.equal(plan.code, 'agent-error');
+  assert.equal(plan.message, 'Codex: 403 Your plan does not include this model.');
 });
 
 test('a turn that ends with nothing said is said so; a refusal for the plan does not sign the agent out', async () => {
@@ -315,4 +349,52 @@ test('a Codex older than the ones tried, that did not start, is said to need an 
   const signIn = Object.assign(new Error('Codex is not signed in.'), { code: 'sign-in' });
   assert.equal(codexTooOld('codex', '/usr/local/bin/codex', signIn, () => '0.104.0'), signIn);
   assert.equal(codexTooOld('claude', '/usr/local/bin/claude', failed, () => '0.104.0'), failed);
+});
+
+test("Codex's reconnects and retries, which it says where the chat does not look, are notices in its words", () => {
+  const info = (error) => ({ sessionUpdate: 'session_info_update', _meta: { codex: { error } } });
+  assert.deepEqual(codexNotice(info({ message: 'Reconnecting... 2/5', additionalDetails: 'stream disconnected before completion: Connection refused (os error 61)', willRetry: true })), {
+    sessionUpdate: 'notice', severity: 'warning', title: 'Reconnecting... 2/5', description: 'stream disconnected before completion: Connection refused (os error 61)',
+  });
+  assert.deepEqual(codexNotice(info({ message: 'Quota exceeded.', additionalDetails: null, willRetry: false })), { sessionUpdate: 'notice', severity: 'error', title: 'Quota exceeded.' });
+  assert.equal(codexNotice(info({ message: ' ' })), null);
+  assert.equal(codexNotice({ sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type: 'idle' } } } }), null);
+  assert.equal(codexNotice({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi' } }), null);
+});
+
+test('a failure keeps what the agent said; one that says nothing says where it stopped, how its process ended and what it wrote', () => {
+  const said = Object.assign(new Error('Codex process has exited with code 3:\nerror: failed to connect'), { code: 1001 });
+  assert.equal(explainFailure(said, { label: 'Codex', step: 'session/new' }), said);
+
+  const bare = explainFailure(Object.assign(new Error('Internal error'), { code: -32603 }), { label: 'Codex', step: 'session/prompt' });
+  assert.equal(bare.message, 'Codex stopped while answering without saying why. If it cannot reach its service, check the network or proxy, then try again.');
+  assert.equal(bare.code, -32603);
+  assert.equal(bare.step, 'session/prompt');
+
+  const crashed = explainFailure(new Error('ACP connection closed'), {
+    label: 'Codex', step: 'initialize', exited: { code: 1 },
+    stderr: "node:events:487\n      throw er; // Unhandled 'error' event\n      ^\n\nError: write EPIPE\n    at afterWriteDispatched (node:internal/stream_base_commons:159:15)\nEmitted 'error' event on Socket instance at:\n  errno: -32,\n  code: 'EPIPE',\n}\n\nNode.js v26.0.0\n",
+  });
+  assert.equal(crashed.message, 'Codex stopped as it started without saying why. Its process ended with code 1. It last wrote: Error: write EPIPE');
+
+  const ended = explainFailure(new Error('Rate limit reached.'), { label: 'Kimi', exited: { code: null } });
+  assert.equal(ended.message, 'Rate limit reached. Its process ended.');
+});
+
+test('"Internal error" with its reason in data: the reason is what the turn says, and the error as sent stays under it', () => {
+  const sent = Object.assign(new Error('Internal error'), { code: -32603, data: { details: 'Request timed out.' } });
+  const said = explainFailure(signInError('Codex', sent, { own: true }), { label: 'Codex', step: 'session/prompt' });
+  assert.equal(said.message, 'Request timed out.', 'a reason given is not "without saying why"');
+  let asSent = said;
+  while (asSent.cause) asSent = asSent.cause;
+  assert.equal(asSent, sent, 'the turn log reaches the error as the agent sent it');
+
+  const bare = explainFailure(signInError('Codex', Object.assign(new Error('Internal error'), { code: -32603 }), { own: true }), { label: 'Codex', step: 'session/prompt', exited: { code: 1 } });
+  assert.match(bare.message, /^Codex stopped while answering without saying why\. Its process ended with code 1\./);
+});
+
+test("what an agent's stderr says: the lines that name an error, else its last lines", () => {
+  assert.equal(stderrReason('starting\nwarning: slow disk\nlistening'), 'starting | warning: slow disk | listening');
+  assert.equal(stderrReason('ok\nError: cannot read config.toml\n    at load (x.js:1:1)\ndone'), 'Error: cannot read config.toml');
+  assert.equal(stderrReason(''), '');
 });

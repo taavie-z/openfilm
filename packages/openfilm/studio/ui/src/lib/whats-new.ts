@@ -17,6 +17,52 @@ export interface ReleaseNotes { version: string; date: string; notes: Record<Lan
 
 export const RELEASES: readonly ReleaseNotes[] = [
   {
+    version: '0.2.1',
+    date: '2026-10-19',
+    notes: {
+      en: [
+        { kind: 'new', text: 'The timeline has a main track with its magnet and linkage, and a preview axis. Moving, pasting or dropping a clip never cuts another one.' },
+        { kind: 'new', text: 'Projects lists every project in your projects folder, and a project can have its own cover. Export › Editing project adds Final Cut Pro.' },
+        { kind: 'improved', text: 'Preview, scrubbing and the timeline stay smooth even in big films, and exports leave the computer usable.' },
+        { kind: 'improved', text: 'The chat takes any number of files and folders, where they are. Settings › Developer has Diagnostics, and each of your own models takes its context length.' },
+        { kind: 'improved', text: 'The app’s own agent waits up to 15 minutes for a model that thinks before it answers, and a failed turn says why.' },
+        { kind: 'fixed', text: 'Footage the browser can’t decode plays everywhere; file names with #, ? and % work; Gemini CLI, which Google no longer serves, leaves the agents.' },
+      ],
+      'zh-CN': [
+        { kind: 'new', text: '时间线新增主轨，带主轨磁吸和联动，还有预览轴。移动、粘贴或拖入片段，都不会把别的片段切开。' },
+        { kind: 'new', text: '项目页会列出项目文件夹里的所有项目，每个项目也可以设置自己的封面。导出 › 剪辑工程 新增 Final Cut Pro。' },
+        { kind: 'improved', text: '预览、拖动播放头和时间线在大项目里也很流畅；导出时电脑仍然好用。' },
+        { kind: 'improved', text: '对话可以添加任意多个文件和文件夹，不会复制，原样引用。设置 › 开发者 新增「诊断」；自有密钥的每个模型可以填自己的上下文长度。' },
+        { kind: 'improved', text: '内置智能体等模型思考的时间延长到 15 分钟；一轮失败时会说明原因。' },
+        { kind: 'fixed', text: '浏览器无法解码的视频也能在各处播放；文件名里有 #、? 和 % 也没问题；Google 已停止服务的 Gemini CLI 不再出现在智能体里。' },
+      ],
+      ja: [
+        { kind: 'new', text: 'タイムラインにメイントラックが加わり、メイントラックのマグネットと連動、プレビュー軸も使えます。クリップを移動・貼り付け・ドロップしても、ほかのクリップが切られることはありません。' },
+        { kind: 'new', text: 'プロジェクト画面にプロジェクトフォルダ内のすべてのプロジェクトが並び、プロジェクトごとにカバーを設定できます。書き出し › 編集プロジェクトに Final Cut Pro が加わりました。' },
+        { kind: 'improved', text: '大きな映像でもプレビュー、スクラブ、タイムラインが滑らかで、書き出し中もパソコンを普通に使えます。' },
+        { kind: 'improved', text: 'チャットにファイルやフォルダをいくつでも、コピーせずにそのまま添付できます。設定 › 開発者に「診断」が加わり、自分のキーの各モデルにコンテキスト長を設定できます。' },
+        { kind: 'improved', text: 'アプリ内蔵のエージェントは、考えてから答えるモデルを最大 15 分待ちます。失敗したターンは理由を表示します。' },
+        { kind: 'fixed', text: 'ブラウザで再生できない動画もどこでも再生できます。#、?、% を含むファイル名も使えます。Google が提供を終えた Gemini CLI はエージェントから外れました。' },
+      ],
+      ko: [
+        { kind: 'new', text: '타임라인에 메인 트랙이 생기고 메인 트랙 자석과 연동, 미리보기 축을 쓸 수 있습니다. 클립을 옮기거나 붙여 넣거나 끌어 놓아도 다른 클립이 잘리지 않습니다.' },
+        { kind: 'new', text: '프로젝트 화면에 프로젝트 폴더의 모든 프로젝트가 보이고, 프로젝트마다 표지를 정할 수 있습니다. 내보내기 › 편집 프로젝트에 Final Cut Pro가 추가되었습니다.' },
+        { kind: 'improved', text: '큰 영상에서도 미리보기, 스크러빙, 타임라인이 부드럽고, 내보내는 동안에도 컴퓨터를 편하게 쓸 수 있습니다.' },
+        { kind: 'improved', text: '채팅에 파일과 폴더를 개수 제한 없이, 복사하지 않고 그대로 첨부할 수 있습니다. 설정 › 개발자에 "진단"이 생겼고, 내 키의 모델마다 컨텍스트 길이를 정할 수 있습니다.' },
+        { kind: 'improved', text: '앱 자체 에이전트는 생각한 뒤 답하는 모델을 최대 15분 기다리고, 실패한 턴은 이유를 알려 줍니다.' },
+        { kind: 'fixed', text: '브라우저가 디코딩하지 못하는 영상도 어디서나 재생됩니다. #, ?, %가 들어간 파일 이름도 됩니다. Google이 서비스를 끝낸 Gemini CLI는 에이전트에서 빠졌습니다.' },
+      ],
+      es: [
+        { kind: 'new', text: 'La línea de tiempo tiene una pista principal con su imán y la vinculación, y un eje de vista previa. Mover, pegar o soltar un clip nunca corta otro.' },
+        { kind: 'new', text: 'Proyectos muestra todos los proyectos de tu carpeta de proyectos, y cada proyecto puede tener su propia portada. Exportar › Proyecto de edición añade Final Cut Pro.' },
+        { kind: 'improved', text: 'La vista previa, el desplazamiento y la línea de tiempo van fluidos incluso en películas grandes, y exportar deja el equipo usable.' },
+        { kind: 'improved', text: 'El chat admite cualquier número de archivos y carpetas, donde están, sin copiarlos. Ajustes › Desarrollador tiene Diagnóstico, y cada modelo de tu propia clave admite su longitud de contexto.' },
+        { kind: 'improved', text: 'El agente propio de la app espera hasta 15 minutos a un modelo que piensa antes de responder, y un turno fallido dice por qué.' },
+        { kind: 'fixed', text: 'El vídeo que el navegador no puede decodificar se reproduce en todas partes; los nombres de archivo con #, ? y % funcionan; Gemini CLI, que Google ya no ofrece, deja los agentes.' },
+      ],
+    },
+  },
+  {
     version: '0.2.0',
     date: '2026-10-17',
     notes: {

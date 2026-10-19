@@ -195,8 +195,11 @@ export interface DesktopBridge {
     signIn(agent: LocalAgentId): Promise<{ ok: true } | { ok: false; error: string }>;
     /** Opens a session and closes it at once, only for its options. Sends no message, so costs nothing. */
     probe(agent: LocalAgentId): Promise<{ ok: true; info: LocalAgentSessionInfo } | { ok: false; error: string; code?: string }>;
-    /** `resume`: the agent's own id of a conversation it had (an earlier start's info.sessionId), to go on with */
-    start(agent: LocalAgentId, cwd: string, resume?: string | null): Promise<
+    /**
+     * `resume`: the agent's own id of a conversation it had (an earlier start's info.sessionId), to go on with.
+     * `meta`: the turn it starts for, whose log says why when it does not start.
+     */
+    start(agent: LocalAgentId, cwd: string, resume?: string | null, meta?: LocalAgentTurnMeta): Promise<
       | { ok: true; key: string; info: LocalAgentSessionInfo }
       | { ok: false; error: string; code?: string; install?: string }
     >;

@@ -13,8 +13,8 @@
  *   · size: each official program is 200–330 MB; the adapters are a few MB and take its path
  *     (`CLAUDE_CODE_EXECUTABLE`, `CODEX_PATH`);
  *   · terms: Anthropic lets people use their own subscription in the unmodified Claude Code, and does not let anyone
- *     else hold or pass on their credentials. The app runs their own program, sign-in is its own (`claude auth login`,
- *     `codex login`, in Terminal, or a command window on Windows), and the app never sees a token.
+ *     else hold or pass on their credentials. The app runs their own program, sign-in is its own (`claude auth login`
+ *     in Terminal, or a command window on Windows; Codex in Codex itself), and the app never sees a token.
  *
  * Each uses the account signed in on the computer, as it is: one switched in the agent (or its maker's app) is the
  * one used once the agent is connected again here.
@@ -45,7 +45,8 @@ const require = createRequire(import.meta.url);
  * Each agent: through an adapter the app carries (`adapter`, told where the person's program is by `env`), or the
  * person's program itself with `args`. Signed in? `auth` asks the program (its words say); without it, a session is
  * opened and closed (acpSignedIn). `login` is its own sign-in, run in Terminal (none: the program itself, which asks
- * for one on its first run). `authenticate`: the ACP auth method that takes up the program's own sign-in.
+ * for one on its first run; null: signed in in the program or its maker's app, never from here, so one found is
+ * connected). `authenticate`: the ACP auth method that takes up the program's own sign-in.
  * `approve`: it asks permission for what the app lets every agent do (see the chat's AGENT_FORCED_PREFS), so the app
  * answers yes itself. The others are told the app's INSTRUCTIONS in the first message of a session (`systemPrompt`:
  * how Claude Code and Codex are told them instead).
@@ -68,8 +69,9 @@ export const AGENTS = Object.freeze({
     label: 'Codex',
     adapter: '@agentclientprotocol/codex-acp',
     env: (path) => codexLaunchEnv(path),
+    /* asked only for whose account it is: Codex is signed in in Codex (its app, or `codex login`) */
     auth: ['login', 'status'],
-    login: ['login'],
+    login: null,
     systemPrompt: true,
   },
   copilot: { label: 'GitHub Copilot', args: ['--acp', '--allow-all'], login: ['login'], approve: true },
@@ -505,6 +507,7 @@ export async function openAgentSignIn(id) {
   const pathDirs = (await loginShellEnvironment()).PATH.split(PATH_SEP);
   const cli = spec ? resolveAgentCli(id, { pathDirs }) : null;
   if (!spec || !cli) return { ok: false, error: `${spec?.label ?? id} is not installed on this computer.` };
+  if (spec.login === null) return { ok: false, error: `Sign in in ${spec.label} itself.` };
   asked.delete(id);
   let how = null;
   if (spec.acpSignIn) {
@@ -579,10 +582,15 @@ async function agentOnComputer(id, pathDirs) {
     label: AGENTS[id].label,
     cli: cli ? { path: cli.path, source: cli.source } : null,
     chosen: chosenPaths[id] ?? null,
-    ...(cli ? await agentStatus(id, cli.path) : { signedIn: null, account: null }),
+    ...(cli ? ownSignIn(AGENTS[id], await agentStatus(id, cli.path)) : { signedIn: null, account: null }),
     install,
     setupRequired: claudeApp ? 'code-tab' : null,
   };
+}
+
+/** An agent signed in in its own program (`login: null`) is never signed out here: its account, if it says one. */
+export function ownSignIn(spec, status) {
+  return spec.login === null && status.signedIn === false ? { ...status, signedIn: null } : status;
 }
 
 /** The adapter's command line (its package's `bin`), run with Electron's own Node. */
@@ -734,11 +742,11 @@ const INTERNAL_ERROR = -32603;
  * Code…") is the agent's own words (`code: 'agent-error'`): signing in again would not help, and the agent is not taken
  * for signed out. Any other error with its reason (errorCause).
  */
-export function signInError(label, e) {
+export function signInError(label, e, { own = false } = {}) {
   if (e?.code === AUTH_REQUIRED) {
     const plan = planProblem(e?.message);
     if (plan) return Object.assign(new Error(`${label}: ${plan}`), { code: 'agent-error' });
-    return Object.assign(new Error(`${label} is not signed in. Sign in under Settings → Agents.`), { code: 'sign-in' });
+    return Object.assign(new Error(`${label} is not signed in. ${own ? `Sign in in ${label}, then try again.` : 'Sign in under Settings → Agents.'}`), { code: 'sign-in' });
   }
   return errorCause(e);
 }
@@ -753,6 +761,90 @@ export function errorCause(e) {
   const data = e.data;
   const why = typeof data === 'string' ? data : [data?.message, data?.details].find((v) => typeof v === 'string') ?? '';
   return why.trim() ? Object.assign(new Error(why.trim(), { cause: e }), { code: e.code }) : e;
+}
+
+/**
+ * The model service's refusal, when that is what a reply's words are: Codex's adapter sends an error from OpenAI as
+ * the reply (`{"type":"error","status":400,"error":{"message":…}}`), and the turn ends as if answered. Its message
+ * and status, or null for anything else.
+ * @returns {{ message: string, status: number | null } | null}
+ */
+export function codexServiceError(update) {
+  if (update?.sessionUpdate !== 'agent_message_chunk' || update.content?.type !== 'text') return null;
+  const text = String(update.content.text ?? '').trim();
+  if (!text.startsWith('{"type":"error"')) return null;
+  try {
+    const said = JSON.parse(text);
+    const message = typeof said?.error?.message === 'string' ? said.error.message.trim() : '';
+    return said?.type === 'error' && message ? { message, status: Number.isInteger(said.status) ? said.status : null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The turn's error for a refusal. A model "not supported when using Codex" is one this Codex is too old for (Codex
+ * lists models it cannot use yet): updating it, or another model, is the fix.
+ * @param {{ message: string }} refused @param {string | undefined} path @param {(file: string) => string | null} [versionOf]
+ */
+export function codexRefusal(refused, path, versionOf = codexVersion) {
+  if (!/not supported when using Codex/i.test(refused.message)) return new Error(refused.message);
+  const version = path ? versionOf(path) : null;
+  return Object.assign(new Error(`${refused.message} Update Codex${version ? ` (this one is ${version})` : ''}, or choose another model.`), { code: 'outdated' });
+}
+
+/**
+ * Codex's reconnects and retries ("Reconnecting... 2/5", "waiting for network"), and an error of a turn not running
+ * now: its adapter puts them in a session_info_update's `_meta.codex.error`, which says nothing in the chat. As the
+ * notice the chat shows (its words, then what it adds), or null.
+ */
+export function codexNotice(update) {
+  const error = update?.sessionUpdate === 'session_info_update' ? update._meta?.codex?.error : null;
+  const title = typeof error?.message === 'string' ? error.message.trim() : '';
+  if (!title) return null;
+  const details = typeof error.additionalDetails === 'string' ? error.additionalDetails.trim() : '';
+  return { sessionUpdate: 'notice', severity: error.willRetry ? 'warning' : 'error', title, ...(details ? { description: details } : {}) };
+}
+
+/** where each step of a session is, in words */
+const STEP_WORDS = Object.freeze({
+  start: 'as it started', initialize: 'as it started', authenticate: 'while signing in',
+  'session/new': 'while opening the session', 'session/prompt': 'while answering',
+});
+
+/** what an agent says when it says nothing: an error with no reason, or its process gone mid-request */
+const SAYS_NOTHING = /^(?:internal error|internal server error|unknown error|(?:acp )?connection closed|pending response rejected since connection got disposed)\.?$/i;
+
+/* stderr lines that never say why: a stack frame, a caret, a brace, a property of the error printed, Node's banner
+   and its "Emitted 'error' event" */
+const NOISE = /^(?:at\s|\^+$|[{}]$|[a-z]+: [-'\w]+,?$|Node\.js v|node:|throw\s|Emitted '\w+' event)/;
+const REASON = /error|fail|cannot|can't|refused|denied|not found|panic|timed? ?out|unable/i;
+
+/** What the last of an agent's stderr says: its last lines that name an error, else its last lines; at most 600 characters. */
+export function stderrReason(stderr = '') {
+  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !NOISE.test(l));
+  const reasons = lines.filter((l) => REASON.test(l));
+  return [...new Set((reasons.length ? reasons : lines).slice(-3))].join(' | ').slice(-600);
+}
+
+/**
+ * An agent's failure as it is: what it said when it said why; else the step it stopped at, how its process ended and
+ * the last it wrote to stderr; with neither, that an agent which cannot reach its service stops like this.
+ * @param {any} e @param {{ label: string, step?: string | null, stderr?: string, exited?: { code: number | null } | null }} at
+ */
+export function explainFailure(e, { label, step = null, stderr = '', exited = null }) {
+  const said = (e instanceof Error ? e.message : String(e ?? '')).trim();
+  const bare = !said || SAYS_NOTHING.test(said);
+  if (!bare && !exited) return e;
+  const tail = stderrReason(stderr);
+  const where = step && STEP_WORDS[step] ? ` ${STEP_WORDS[step]}` : '';
+  const ended = exited ? ` Its process ended${exited.code == null ? '' : ` with code ${exited.code}`}.` : '';
+  const message = [
+    bare ? `${label} stopped${where} without saying why.` : said,
+    ended.trim(),
+    tail ? `It last wrote: ${tail}` : bare ? 'If it cannot reach its service, check the network or proxy, then try again.' : '',
+  ].filter(Boolean).join(' ');
+  return Object.assign(new Error(message, { cause: e }), { ...(e?.code !== undefined ? { code: e.code } : {}), ...(step ? { step } : {}) });
 }
 
 /** What an agent's sign-in refusal says when it is about the person's plan, not their sign-in, or null. */
@@ -854,13 +946,42 @@ export class AgentSession {
    */
   async start() {
     try {
-      return await this.open();
+      const info = await this.open();
+      this.step = null;
+      return info;
     } catch (e) {
-      throw codexTooOld(this.opts.agent, this.cli?.path, e);
+      throw await this.explain(codexTooOld(this.opts.agent, this.cli?.path, e));
     }
   }
 
+  /**
+   * An error with what the agent said, or, when it said nothing, where it stopped and what it last wrote. Its process
+   * may be ending as the request fails: how it ended is waited for, a second at most.
+   */
+  async explain(e) {
+    if (this.child && !this.exited && this.child.exitCode === null && this.child.signalCode === null) {
+      await new Promise((done) => { this.child.once('exit', done); setTimeout(done, 1000).unref?.(); });
+    }
+    return explainFailure(e, { label: this.spec.label, step: this.step, stderr: this.stderr, exited: this.exited ?? null });
+  }
+
+  /**
+   * What a failure needs said for the turn log: the step it stopped at, the program, its adapter, how its process
+   * ended, all it wrote to stderr, and where the agent keeps its own logs.
+   */
+  failure() {
+    return {
+      step: this.step ?? null,
+      program: this.cli?.path ?? null,
+      adapter: this.spec.adapter ?? null,
+      exit: this.exited ?? null,
+      stderr: this.stderr.slice(-8000),
+      ...(this.ownLogs ? { ownLogs: this.ownLogs } : {}),
+    };
+  }
+
   async open() {
+    this.step = 'start';
     const shell = agentShell(this.opts.agent, await loginShellVariables({ staleOk: true }));
     const harness = this.opts.harness ?? null;
     const cli = harness ? null : resolveAgentCli(this.opts.agent, { pathDirs: shell.PATH.split(PATH_SEP) });
@@ -898,6 +1019,7 @@ export class AgentSession {
     const env = childEnvironment({ shell: { ...shell, PATH: path }, extra });
     const claude = this.spec.adapter === AGENTS.claude.adapter;
     if (this.spec.adapter === AGENTS.codex.adapter) {
+      this.ownLogs = shell.CODEX_HOME || join(homedir(), '.codex');
       const theirs = codexDeveloperInstructions(codexConfigText(shell));
       env.CODEX_CONFIG = JSON.stringify(mergeConfig({ developer_instructions: theirs ? `${theirs}\n\n${instructions}` : instructions }, skills?.codexConfig ?? {}));
     }
@@ -910,7 +1032,7 @@ export class AgentSession {
       : spawn(node.command, [...(node.env.ELECTRON_RUN_AS_NODE ? [AS_NODE] : []), script], { cwd: this.opts.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child.stderr.on('data', (d) => { this.stderr = (this.stderr + String(d)).slice(-16_000); });
     LIVE.add(this);
-    this.child.once('exit', (code) => { LIVE.delete(this); this.opts.onExit?.({ code, stderr: this.stderr }); });
+    this.child.once('exit', (code) => { LIVE.delete(this); this.exited = { code }; this.opts.onExit?.({ code, stderr: this.stderr }); });
     this.child.once('error', () => {});
 
     const stream = acp.ndJsonStream(Writable.toWeb(this.child.stdin), Readable.toWeb(this.child.stdout));
@@ -932,15 +1054,27 @@ export class AgentSession {
         this.heard = Date.now();
         const phase = agentPhase(update);
         if (phase) this.phase = phase;
-        if (!this.replaying) this.opts.onUpdate?.(update?.configOptions ? { ...update, configOptions: distinctOptions(update.configOptions) } : update);
+        if (this.replaying) return;
+        /* Codex's adapter sends the model service's refusal as the reply's words: kept to fail the turn with */
+        const codex = this.spec.adapter === AGENTS.codex.adapter;
+        const refused = codex ? codexServiceError(update) : null;
+        if (refused) { this.refused = refused; return; }
+        this.opts.onUpdate?.(update?.configOptions ? { ...update, configOptions: distinctOptions(update.configOptions) } : update);
+        /* and its reconnects and retries, which it says where the chat does not look, as notices (once each) */
+        const notice = codex ? codexNotice(update) : null;
+        if (notice && notice.title !== this.lastNotice) {
+          this.lastNotice = notice.title;
+          this.opts.onUpdate?.(notice);
+        }
       })
       .connect(stream);
 
+    this.step = 'initialize';
     const init = await this.conn.agent.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: CLIENT_CAPABILITIES,
       clientInfo: CLIENT_INFO,
-    }).catch((e) => { throw signInError(this.spec.label, e); });
+    }).catch((e) => { throw signInError(this.spec.label, e, { own: this.spec.login === null }); });
 
     const params = {
       cwd: this.opts.cwd,
@@ -950,9 +1084,11 @@ export class AgentSession {
     };
     /* the program's own sign-in, taken up (Cursor asks for this before any session) */
     if (this.spec.authenticate && (init.authMethods ?? []).some((m) => m.id === this.spec.authenticate)) {
-      await this.conn.agent.request(acp.methods.agent.authenticate, { methodId: this.spec.authenticate }).catch((e) => { throw signInError(this.spec.label, e); });
+      this.step = 'authenticate';
+      await this.conn.agent.request(acp.methods.agent.authenticate, { methodId: this.spec.authenticate }).catch((e) => { throw signInError(this.spec.label, e, { own: this.spec.login === null }); });
     }
 
+    this.step = 'session/new';
     let session = null;
     const resume = this.opts.resume;
     const caps = init.agentCapabilities ?? {};
@@ -964,7 +1100,7 @@ export class AgentSession {
       this.replaying = false;
     }
     const resumed = Boolean(session);
-    session ??= await this.conn.agent.request(acp.methods.agent.session.new, params).catch((e) => { throw signInError(this.spec.label, e); });
+    session ??= await this.conn.agent.request(acp.methods.agent.session.new, params).catch((e) => { throw signInError(this.spec.label, e, { own: this.spec.login === null }); });
     this.sessionId = session.sessionId;
     /* an agent on the protocol's older model and mode lists: the same choices, as config options */
     this.legacy = !session.configOptions && Boolean(session.models || session.modes);
@@ -1014,6 +1150,9 @@ export class AgentSession {
     this.instructions = null;
     /* the message exactly as the agent gets it, for the turn log */
     this.opts.onSend?.({ prompt: [...told, ...blocks], ...meta });
+    this.refused = null;
+    this.lastNotice = null;
+    this.step = 'session/prompt';
     this.spoke = false;
     this.heard = Date.now();
     this.phase = null;
@@ -1032,18 +1171,19 @@ export class AgentSession {
     }, Math.min(15_000, Math.max(50, stallMs / 4)));
     watch.unref?.();
     const asking = this.conn.agent.request(acp.methods.agent.session.prompt, { sessionId: this.sessionId, prompt: [...told, ...blocks], ...meta })
-      .catch((e) => {
+      .catch(async (e) => {
         /* the app's own agent: a service with no balance left is said the same for every service, with its page */
         const own = this.opts.harness?.models?.find((m) => m.id === this.modelNow) ?? this.opts.harness?.models?.[0];
         const broke = own ? outOfBalance({ id: own.name, baseUrl: own.baseUrl }, e) : null;
         if (broke) throw broke;
         if (!isAgentId(this.opts.agent)) throw errorCause(e);
-        const said = signInError(this.spec.label, e);
+        const said = signInError(this.spec.label, e, { own: this.spec.login === null });
         if (said.code === 'sign-in') noteSignedOut(this.opts.agent);
-        throw said;
+        throw await this.explain(said);
       });
     const r = await Promise.race([asking, gaveUp]).finally(() => clearInterval(watch));
     if (stalled && r.stopReason === 'cancelled') throw stallError(this.spec.label, stallMs);
+    if (this.refused) throw codexRefusal(this.refused, this.cli?.path);
     /* a turn the agent gave up on with its reason beside it, not in its reply (CodeBuddy: a network error): said as
        the turn's error, or the chat would show an empty reply */
     const why = r.stopReason === 'refusal' ? turnError(r) : null;
@@ -1052,6 +1192,7 @@ export class AgentSession {
     if (r.stopReason === 'end_turn' && !this.spoke && isAgentId(this.opts.agent)) {
       throw Object.assign(new Error(`${this.spec.label} ended its turn without replying. If it keeps doing so, try ${this.spec.label} in its own terminal: it may need an update, or a plan that covers it.`), { code: 'empty-turn' });
     }
+    this.step = null;
     return r.stopReason;
   }
 

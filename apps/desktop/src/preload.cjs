@@ -69,7 +69,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     signIn: (agent) => invoke('desktop:local-agents:sign-in')({ agent }),
     disconnect: (agent) => invoke('desktop:local-agents:disconnect')({ agent }),
     probe: (agent) => invoke('desktop:local-agents:probe')({ agent }),
-    start: (agent, cwd, resume) => invoke('desktop:local-agents:start')({ agent, cwd, resume }),
+    start: (agent, cwd, resume, meta) => invoke('desktop:local-agents:start')({ agent, cwd, resume, meta }),
     prompt: (key, text, meta, images) => invoke('desktop:local-agents:prompt')({ key, text, meta, images }),
     running: () => ipcRenderer.invoke('desktop:local-agents:running'),
     ack: (key, turnId) => invoke('desktop:local-agents:ack')({ key, turnId }),
