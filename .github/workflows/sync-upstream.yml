@@ -1,0 +1,28 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'taavie-z/openfilm' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Sync main from the upstream repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: taavie-z/openfilm
+        # GitHub merges upstream changes without discarding fork commits; conflicts fail the run.
+        run: gh api --method POST "repos/${GH_REPO}/merge-upstream" -f branch=main
