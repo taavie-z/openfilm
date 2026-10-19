@@ -17,12 +17,16 @@ jobs:
     if: github.repository == 'taavie-z/openfilm' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: write
     steps:
       - name: Sync main from the upstream repository
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Fine-grained PAT: this repository only, Contents and Workflows read/write.
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
           GH_REPO: taavie-z/openfilm
         # GitHub merges upstream changes without discarding fork commits; conflicts fail the run.
-        run: gh api --method POST "repos/${GH_REPO}/merge-upstream" -f branch=main
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the FORK_SYNC_TOKEN repository secret with Contents and Workflows read/write permissions for this fork."
+            exit 1
+          fi
+          gh api --method POST "repos/${GH_REPO}/merge-upstream" -f branch=main
