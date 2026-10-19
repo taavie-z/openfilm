@@ -37,7 +37,7 @@ import { clipKind, pictureRect, soundRole } from '../../src/film-doc.mjs';
  * @typedef {'voice' | 'music' | 'sfx' | 'footage'} SoundRole
  *   A sound's stem (see soundStem)
  * @typedef {{ id: string, src: string, path: string, at: number, from: number, to: number, speed: number, volume: number,
- *   enabled: boolean, role: SoundRole, track?: number, picture?: string, facts: SourceFacts | null, fade?: [number, number] }} NleSound
+ *   enabled: boolean, role: SoundRole, track?: number, sourceRow?: string, picture?: string, facts: SourceFacts | null, fade?: [number, number] }} NleSound
  *   A sound: the source seconds [from, to) at `speed`, placed at film second `at`; `picture`: the footage clip it is
  *   the sound of; `fade`: its fades in and out, film seconds (fitted to its length)
  * @typedef {{ stage: { w: number, h: number }, duration: number, pictures: NlePicture[], sounds: NleSound[] }} NleFilm
@@ -56,10 +56,10 @@ import { clipKind, pictureRect, soundRole } from '../../src/film-doc.mjs';
  *   video?: { w: number, h: number, alpha: boolean, still: boolean, fps?: number }, audio?: { channels: number, sampleRate: number } }} NleFile
  * @typedef {{ id: string, name: string, fileId: string, start: number, end: number, in: number, out: number, enabled: boolean,
  *   motion?: { scale: number, center: { h: number, v: number } }, gain?: number,
- *   levels?: { when: number, value: number }[], linkGroup?: string }} NleClip
+ *   levels?: { when: number, value: number }[], linkGroup?: string, sourceRow?: string }} NleClip
  *   Sequence frames [start, end), file frames [in, out); `gain` linear; `levels` its gain's keyframes (its fades),
  *   frames from the clip's first
- * @typedef {{ name: string, enabled: boolean, clips: NleClip[], sourceTrack?: number }} NleTrack
+ * @typedef {{ name: string, enabled: boolean, clips: NleClip[], sourceTrack?: number, role?: SoundRole }} NleTrack
  * @typedef {{ name: string, rate: NleRate, width: number, height: number, durationFrames: number, video: NleTrack[],
  *   audio: NleTrack[], files: NleFile[] }} NleTimeline
  */
@@ -168,6 +168,7 @@ function sourceAudioGroups(sounds) {
  */
 export function planNleTimeline(film, opts) {
   const rate = nleRate(opts.fps);
+  const sourceTracks = opts.audioTracks === 'source';
   const { stage } = film;
   /** @type {NleFile[]} */
   const files = [];
@@ -241,9 +242,10 @@ export function planNleTimeline(film, opts) {
     const span = frameSpan(p.at, p.end, rate);
     const len = span.end - span.start;
     if (len <= 0) continue;
+    const link = sourceTracks && p.kind === 'video' ? { linkGroup: `footage-${p.id}` } : {};
     const bake = () => {
       const file = addFile({ ...mediaPath(p.id, 'mov'), job: { kind: 'render', clip: p.id, frames: len }, durationFrames: len, video: { w: stage.w, h: stage.h, alpha: true, still: false } });
-      visual.push({ track: p.track, ...span, clip: { id: clipId(), name: p.id, fileId: file.id, ...span, in: 0, out: len, enabled: !p.hidden } });
+      visual.push({ track: p.track, ...span, clip: { id: clipId(), name: p.id, fileId: file.id, ...span, in: 0, out: len, enabled: !p.hidden, ...link } });
     };
     /* a clip with a look of its own (the film's CSS: a crop, round corners) is drawn as the film draws it */
     if (p.kind === 'page' || p.styled || p.faded || !p.facts || (p.kind === 'video' && Math.abs(p.speed - 1) > 1e-6)) { bake(); continue; }
@@ -256,6 +258,7 @@ export function planNleTimeline(film, opts) {
     /** @type {NleClip} */
     const clip = {
       id: clipId(), name: p.id, fileId: file.id, start: span.start, end: span.start + out - inFrame, in: inFrame, out, enabled: !p.hidden,
+      ...link,
       ...(placement.kind === 'motion' ? { motion: placement.motion } : {}),
     };
     if (p.kind === 'video') footage.set(p.id, { clip, file, picture: p });
@@ -280,10 +283,9 @@ export function planNleTimeline(film, opts) {
     for (const role of ROLE_ORDER) {
       if (!opts.stems?.includes(role)) continue;
       const file = addFile({ ...mediaPath(`${opts.title || 'Film'} - ${role}`, 'wav'), job: { kind: 'stem', role }, durationFrames: total, audio: { channels: 2, sampleRate: 48_000 } });
-      audio.push({ name: ROLE_NAME[role], enabled: true, clips: [{ id: clipId(), name: `${ROLE_NAME[role]} stem`, fileId: file.id, start: 0, end: total, in: 0, out: total, enabled: true }] });
+      audio.push({ name: ROLE_NAME[role], enabled: true, role, clips: [{ id: clipId(), name: `${ROLE_NAME[role]} stem`, fileId: file.id, start: 0, end: total, in: 0, out: total, enabled: true }] });
     }
   } else {
-    const sourceTracks = opts.audioTracks === 'source';
     /** @type {{ key: string, name: string, sourceTrack?: number }[]} */
     const groups = sourceTracks
       ? sourceAudioGroups(film.sounds)
@@ -325,13 +327,15 @@ export function planNleTimeline(film, opts) {
       const clip = {
         id: clipId(), name: s.id, fileId: file.id, start: span.start, end: span.start + out - inFrame, in: inFrame, out,
         enabled: s.enabled,
+        ...(sourceTracks && s.sourceRow ? { sourceRow: s.sourceRow } : {}),
         ...(Math.abs(s.volume - 1) > 1e-6 ? { gain: round6(Math.min(3.98109, s.volume)) } : {}),
       };
       if (faded && s.fade) clip.levels = fadeKeyframes(s.fade, out - inFrame, Math.min(3.98109, s.volume), rate);
-      if (own && linked) {
+      if (own && linked && !sourceTracks) {
         linked.clip.linkGroup = `link-${linked.clip.id}`;
         clip.linkGroup = linked.clip.linkGroup;
       }
+      if (sourceTracks && s.picture) clip.linkGroup = `footage-${s.picture}`;
       const group = sourceTracks ? `track-${s.track}` : s.role;
       const list = byGroup.get(group) ?? [];
       list.push({ start: clip.start, end: clip.end, clip });

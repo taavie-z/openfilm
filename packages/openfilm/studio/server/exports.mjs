@@ -59,6 +59,7 @@ import { fileURLToPath } from 'node:url';
 import { FilmPage, launch } from '../../src/host.mjs';
 import { filmSound, kill as killProcess, mix, open } from '../../src/shared.mjs';
 import { FILM_FILE, clipFade, filmHtml, fittedFade, kindOf, pictureRect, readFilmFile } from '../../src/film-doc.mjs';
+import { layerBlocks, rowBadges, trackKind } from './track-layout.mjs';
 import { fcpxmlDocument } from './fcpxml.mjs';
 import { NLE_FPS, nleFps, planNleTimeline, probeSource, soundStem, xmemlDocument } from './nle.mjs';
 import { draftsRoot, jianyingDraft } from './jianying.mjs';
@@ -1108,6 +1109,17 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
       if (signal.aborted) throw new Error('cancelled');
       const byId = new Map(loaded.map((c) => [c.id, c]));
 
+      const rows = ask.format === 'fcpxml' ? doc.tracks.flatMap((track) => {
+        const blocks = track.clips.flatMap((clip) => {
+          const c = byId.get(clip.id);
+          return c ? [{ id: clip.id, startMs: Math.round(c.at * 1000), endMs: Math.round(c.end * 1000) }] : [];
+        });
+        const layers = layerBlocks(blocks);
+        return (layers.length ? layers : [[]]).map((clips) => ({ kind: trackKind(track), clips }));
+      }) : [];
+      const badges = rowBadges(rows.map((row) => row.kind));
+      const sourceRows = new Map(rows.flatMap((row, i) => row.clips.map((clip) => [clip.id, badges[i]])));
+
       /* every source's facts, once */
       /** @type {Map<string, import('./nle.mjs').SourceFacts>} */
       const facts = new Map();
@@ -1145,7 +1157,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
             const f = await factsOf(path);
             if (f.hasAudio) {
               sounds.push({ id: row.id, src: row.src, path, at: c.at, from: c.from, to: c.to, speed: c.speed, volume,
-                enabled: heard, role: soundStem(row.src), track: ti, facts: f, ...(kind === 'video' ? { picture: row.id } : {}), ...(fade ? { fade } : {}) });
+                enabled: heard, role: soundStem(row.src), track: ti, sourceRow: sourceRows.get(row.id), facts: f, ...(kind === 'video' ? { picture: row.id } : {}), ...(fade ? { fade } : {}) });
             }
           }
         }

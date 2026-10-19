@@ -5,6 +5,7 @@
  * clip turns a division into Infinity, a wrong ruler step only looks "a bit dense", a wrong track index shows the
  * wrong name on a row.
  */
+import { layerBlocks } from '../../../server/track-layout.mjs';
 import { clipSpan } from '../../../../src/film-doc.mjs';
 import { fileStem, filmTrackBadges, filmTrackKind, filmTrackPrefix, type FilmBox } from './film.ts';
 
@@ -572,25 +573,8 @@ export function blockTitleOf(block: { title: string; atRef?: string | undefined;
   return notes.length ? `${block.title} · ${notes.join(' · ')}` : block.title;
 }
 
-/**
- * Clips that overlap by no more than this touch (SPEC): times are kept to the millisecond, a clip's start and its
- * length each rounded alone, so two that touch can overlap by one.
- */
-const TOUCH_MS = 1;
-
-/**
- * Lay clips into rows that do not overlap. Two clips overlapping on one row cannot be drawn honestly, so an overlap
- * opens another row. Greedy (the first row it fits), so the rows stay stable: drawing the same film again must not
- * move the clip just clicked.
- */
-function layered(blocks: Block[]): Block[][] {
-  const rows: Block[][] = [];
-  for (const block of [...blocks].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)) {
-    const row = rows.find((r) => (r.at(-1)?.endMs ?? 0) <= block.startMs + TOUCH_MS);
-    if (row) row.push(block); else rows.push([block]);
-  }
-  return rows;
-}
+/** The same row allocation is used when exporting Studio's row names. */
+const layered = layerBlocks;
 
 /**
  * Each clip where film.html puts it now.
