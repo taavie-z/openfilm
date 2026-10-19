@@ -1,15 +1,15 @@
 /**
  * Freeze frame: the frame of a video clip under the playhead, made a still (studio/server/files.mjs freezeFrame) and
- * put in at the playhead on the clip's track, in the timeline's edit mode: with the magnet the video is cut there and
- * what follows moves on by the still's length (with sync lock, on every unlocked track); without it the still covers
- * that much of the video after the playhead. The still looks as the video does (its box, class and style).
+ * put in at the playhead on the clip's track: an insert cuts the video there and what follows on that track moves on
+ * by the still's length (with linkage, what rides on the main track along); an overwrite has the still
+ * cover that much of the video after the playhead. The still looks as the video does (its box, class and style).
  */
 import type { Clip, Op } from '../api.ts';
-import { planRoom, type EditMode, type EditModel } from './timeline-edit.ts';
+import { planRoom, type EditMode, type EditModel, type Switches } from './timeline-edit.ts';
 import { snapToFrame } from './timecode.ts';
 import type { TimelineBlock } from './timeline-layout';
 
-/** How long a freeze frame lasts: 3 s, as CapCut's. */
+/** How long a freeze frame lasts: 3 s. */
 export const FREEZE_MS = 3000;
 
 /** The moment of the clip's file the playhead is on (ms), or null when the playhead is not on the clip. */
@@ -18,7 +18,7 @@ export function freezeSourceMs(block: Pick<TimelineBlock, 'startMs' | 'endMs' | 
   return Math.round((block.inMs ?? 0) + (atMs - block.startMs) * (block.speed ?? 1));
 }
 
-export interface FreezeSpec {
+export interface FreezeSpec extends Partial<Switches> {
   /** The video clip, as film.html has it. */
   clip: Clip;
   /** Its track (film.html index). */
@@ -28,8 +28,6 @@ export interface FreezeSpec {
   /** The still made of its frame (a project path). */
   still: string;
   mode: EditMode;
-  sync: boolean;
-  linkage?: boolean;
   durMs?: number;
 }
 
@@ -46,6 +44,6 @@ export function planFreeze(model: EditModel, spec: FreezeSpec): Op[] | null {
     ...(cls ? { class: cls } : {}),
     ...(style ? { style } : {}),
   };
-  const room = planRoom(model, [{ track: spec.track, startMs, endMs: startMs + durMs }], { mode: spec.mode, sync: spec.sync, linkage: spec.linkage });
+  const room = planRoom(model, [{ track: spec.track, startMs, endMs: startMs + durMs }], { mode: spec.mode, magnet: spec.magnet, linkage: spec.linkage });
   return [{ op: 'insert', clip: still, at: Math.round(startMs) / 1000, track: spec.track }, ...room.ops];
 }

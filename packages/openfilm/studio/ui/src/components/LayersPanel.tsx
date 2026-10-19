@@ -1,11 +1,11 @@
 /**
- * The Layers panel: what is on the picture at the playhead as layers, the top one first, as Figma or Photoshop list
- * them. Each picture clip shown is a row; a page clip opens into its layers, each level in the order the page draws
- * it. A row selects its layer on the picture (and the picture's selection opens the rows down to it); its eye hides
- * it and its lock keeps it from being moved; dragged up or down its own level, or into the level of a row around it
- * (which then moves, with all it holds: CSS restacks only within a level), it is restacked (z-index overrides,
- * studio/server/stage.js `restack`). Nothing is kept here: the tree is read from the pages each time they
- * may have changed, and every change is an override of the page clip in film.html.
+ * The Layers panel: what is on the picture at the playhead as layers, the top one first. Each picture clip shown is
+ * a row; a page clip opens into its layers, each level in the order the page draws it. A row selects its layer on
+ * the picture (and the picture's selection opens the rows down to it); its eye hides it and its lock keeps it from
+ * being moved; dragged up or down its own level, or into the level of a row around it (which then moves, with all
+ * it holds: CSS restacks only within a level), it is restacked (z-index overrides, studio/server/stage.js
+ * `restack`). Nothing is kept here: the tree is read from the pages each time they may have changed, and every
+ * change is an override of the page clip in film.html.
  */
 import React from 'react';
 import {

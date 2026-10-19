@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     open: (projectId) => ipcRenderer.invoke('desktop:tabs:new', { projectId }),
     move: (id, index) => ipcRenderer.invoke('desktop:tabs:move', { id, index }),
     report: (state) => ipcRenderer.invoke('desktop:tabs:report', state ?? {}),
+    retitle: (id, title) => ipcRenderer.invoke('desktop:tabs:retitle', { id, title }),
     openRequest: (to) => ipcRenderer.invoke('desktop:tabs:open', { to }),
     onPick: on('desktop:tabs:pick'),
   },
@@ -49,6 +50,9 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     locate: (id, words) => ipcRenderer.invoke('desktop:agents:locate', { id, words }),
     useAutomatic: (id) => ipcRenderer.invoke('desktop:agents:automatic', { id }),
     diagnose: (id) => ipcRenderer.invoke('desktop:agents:diagnose', { id }),
+    report: () => ipcRenderer.invoke('desktop:agents:report'),
+    /* the whole diagnostic report on the clipboard (main.mjs): the chat's, by a turn that failed */
+    copyReport: () => ipcRenderer.invoke('desktop:diagnostics:copy'),
     saveOwnModel: (config) => ipcRenderer.invoke('desktop:agents:own-model', { config }),
     removeOwnModel: (id) => ipcRenderer.invoke('desktop:agents:own-model-remove', { id }),
     /* the MCP servers the person added to it themselves, each let into OpenFilm or not (skills-ipc.mjs) */
@@ -87,6 +91,8 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     log: (project, turnId, unless) => ipcRenderer.invoke('desktop:chat:log', { project, turnId, unless }),
     reveal: (project, turnId) => ipcRenderer.invoke('desktop:chat:reveal', { project, turnId }),
     saveRefImage: (project, turnId, n, bytes) => ipcRenderer.invoke('desktop:chat:ref-image', { project, turnId, n, bytes }),
+    saveAttachment: (project, name, bytes) => ipcRenderer.invoke('desktop:chat:attachment', { project, name, bytes }),
+    describePaths: (paths) => ipcRenderer.invoke('desktop:chat:paths', { paths }),
     unsaved: (project, except) => ipcRenderer.invoke('desktop:chat:unsaved', { project, except }),
     snapshot: (project, turnId) => ipcRenderer.invoke('desktop:chat:snapshot', { project, turnId }),
     changes: (project, turnId) => ipcRenderer.invoke('desktop:chat:changes', { project, turnId }),
@@ -109,8 +115,6 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     set: (next) => ipcRenderer.invoke('desktop:prefs:set', next),
     onChange: on('desktop:prefs'),
   },
-  /* a file on the disk brought into the project (the page has no way to read it) */
-  importFile: (request) => ipcRenderer.invoke('desktop:import-file', request),
   /* the chat's column as the person left it, kept for the next launch */
   saveLayout: (layout) => ipcRenderer.send('desktop:layout', { chatOpen: layout?.chatOpen === true, chatWidth: Number(layout?.chatWidth) }),
   /* the page's theme, for the window behind it and the system's menus and dialogs */

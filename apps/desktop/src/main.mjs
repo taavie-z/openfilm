@@ -9,14 +9,14 @@
  * in the page (shell/bridge.ts); this process does what only the app can: the window, the agents, files on the disk,
  * ffmpeg, updates (preload.cjs). The window opens straight into the last project.
  */
-import { BaseWindow, Menu, WebContentsView, app, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron';
-import { appendFileSync, createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
+import { BaseWindow, Menu, WebContentsView, app, clipboard, dialog, ipcMain, nativeTheme, safeStorage, screen, shell } from 'electron';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FLAVOR, IDENTITY, PRODUCT_NAME } from './flavor.mjs';
 import { folderDialogOptions, programDialogOptions } from './folder-dialog.mjs';
-import { childEnvironment, loginShellEnvironment } from './environment.mjs';
+import { childEnvironment, lastPathSource, loginShellEnvironment } from './environment.mjs';
+import { gatherAppReport } from './app-report.mjs';
 import { startWindowStudio } from './studio.mjs';
 import { CHAT_MIN, STUDIO_MIN, WINDOW_MIN, placeOnDisplays, readWindowState, writeWindowState } from './window-state.mjs';
 import { createPagePresentation, preparePage, revealPage } from './page-presentation.mjs';
@@ -26,7 +26,7 @@ import { registerLocalAgentIpc } from './local-agents-ipc.mjs';
 import { readPreferences, registerChatIpc } from './chat-ipc.mjs';
 import { registerSkillsIpc } from './skills-ipc.mjs';
 import { createRoster } from './agent-roster.mjs';
-import { checkAgentProgram, diagnoseAgent, listAgents, openAgentSignIn, setChosenPaths } from './agents.mjs';
+import { checkAgentProgram, closeEverySession, diagnoseAgent, listAgents, localAgent, openAgentSignIn, setChosenPaths } from './agents.mjs';
 import { agentUsage, forgetAgentUsage } from './agent-usage.mjs';
 import { installOpenfilmCommand } from './openfilm-command.mjs';
 import { startUpdates } from './updates.mjs';
@@ -351,7 +351,8 @@ async function runStudio(env) {
     home: env.OPENFILM_HOME,
     port: IDENTITY.studioPort,
     /* Studio serves the window's page as its editor (shell/: its editor with the chat beside it) */
-    env: { ...env, OPENFILM_EDITOR_DIR: here('../shell/dist/') },
+    /* its diagnostic file takes the app's own logs too (Studio's diagnostics.mjs) */
+    env: { ...env, OPENFILM_EDITOR_DIR: here('../shell/dist/'), OPENFILM_APP_LOGS: LOGS },
     log,
     onOpen: (url) => {
       /* Studio would open a browser for an address of its own: the window already shows Studio */
@@ -385,6 +386,8 @@ async function start() {
     extra: {
       OPENFILM_HOME: IDENTITY.studioHome ?? process.env.OPENFILM_HOME ?? join(app.getPath('home'), '.openfilm'),
       ...((IDENTITY.library ?? process.env.OPENFILM_LIBRARY) ? { OPENFILM_LIBRARY: IDENTITY.library ?? process.env.OPENFILM_LIBRARY } : {}),
+      /* a flavour with a home of its own still shares the person's library (src/locations.mjs) */
+      ...(IDENTITY.sharedHome ? { OPENFILM_SHARED_HOME: IDENTITY.sharedHome } : {}),
       /* the app names Studio's home, which would put exports inside it (Studio's rule for a home kept apart): the
          Desktop, where `openfilm` puts them, unless this is a flavour with a home of its own */
       ...(IDENTITY.studioHome || process.env.OPENFILM_EXPORTS ? {} : { OPENFILM_EXPORTS: app.getPath('desktop') }),
@@ -473,6 +476,11 @@ async function start() {
     tellTabs();
     return { ok: true };
   });
+  /* another tab's project renamed from this page's tabs: its title, also while that tab has no page to say it */
+  tabHandle('desktop:tabs:retitle', (_self, { id, title }) => {
+    if (typeof title === 'string' && tabs?.report(String(id), { title: title.slice(0, 200) })) tellTabs();
+    return { ok: true };
+  });
   /* Studio's "open this project", heard by each page: settled once here */
   tabHandle('desktop:tabs:open', (_self, { to }) => { openInTabs(to); return { ok: true }; });
   /* a tab left behind long enough lets its page go; it comes back when shown */
@@ -492,7 +500,11 @@ async function start() {
        that has none of its own: the person's own ffmpeg and browsers are what the agent's commands use */
     binDir: installOpenfilmCommand(DATA, { ffmpeg: ffmpegHere, env: browsers }),
     fallbackDir: ffmpegHere,
-    env: { OPENFILM_HOME: env.OPENFILM_HOME, ...(env.OPENFILM_LIBRARY ? { OPENFILM_LIBRARY: env.OPENFILM_LIBRARY } : {}) },
+    env: {
+      OPENFILM_HOME: env.OPENFILM_HOME,
+      ...(env.OPENFILM_LIBRARY ? { OPENFILM_LIBRARY: env.OPENFILM_LIBRARY } : {}),
+      ...(env.OPENFILM_SHARED_HOME ? { OPENFILM_SHARED_HOME: env.OPENFILM_SHARED_HOME } : {}),
+    },
     harness: async (id) => roster?.harness(id) ?? null,
     /* Developer mode: an agent whose own record lacks what its model got logs it here (agent-logs.mjs) */
     logDir: () => (readPreferences(DATA).developer ? join(DATA, 'agent-logs') : null),
@@ -515,6 +527,7 @@ async function start() {
   roster = createRoster({
     dataDir: DATA,
     localAgents: listAgents,
+    localAgent,
     openSignIn: openAgentSignIn,
     /* sessions closed on connecting and disconnecting: the next look at its usage is for whichever account is used now */
     closeSessions: (id) => { forgetAgentUsage(id); localAgents?.closeAgent(id); },
@@ -542,41 +555,27 @@ async function start() {
   agentHandle('desktop:agents:locate', ({ id, words }) => roster.locate(String(id), words));
   agentHandle('desktop:agents:automatic', ({ id }) => roster.useAutomatic(String(id)));
   agentHandle('desktop:agents:diagnose', ({ id }) => roster.diagnose(String(id)));
+  /* the app's part of Studio's diagnostic report (app-report.mjs): the agents as found now, each one's --version */
+  const appReport = () => gatherAppReport({ list: () => roster.refresh(), check: checkAgentProgram }, {
+    version: app.getVersion(), flavor: FLAVOR, packaged: app.isPackaged, channel: updates?.snapshot()?.channel ?? null,
+    electron: process.versions.electron, pathSource: lastPathSource(),
+  });
+  agentHandle('desktop:agents:report', appReport);
+  /* the chat's "Copy diagnostic report" by a turn that failed: what Studio's report has (`openfilm doctor`, with the
+     last week's problems) and the app's agents, on the clipboard (the chat's page may not be let write it) */
+  agentHandle('desktop:diagnostics:copy', async () => {
+    const [computer, own] = await Promise.all([
+      studioApi('/api/doctor').then((r) => String(r.text ?? ''), () => ''),
+      appReport().catch(() => ''),
+    ]);
+    const text = [computer, own].filter(Boolean).join('\n\n────────\n\n');
+    if (!text) return { ok: false };
+    clipboard.writeText(text);
+    return { ok: true };
+  });
   agentHandle('desktop:agents:shown', ({ id, shown }) => { roster.setShown(String(id), shown === true); return { ok: true }; });
   agentHandle('desktop:agents:own-model', ({ config }) => roster.saveOwnModel(config));
   agentHandle('desktop:agents:own-model-remove', ({ id }) => { roster.removeOwnModel(String(id)); return { ok: true }; });
-  /* a file on the disk brought into the chat goes into the project the page names, through Studio's own import (it
-     shows in Studio's media at once, and the import is in the project's history); one without a path the page sends
-     itself. A folder goes as it is, through Studio's bring (files.mjs bringIn): every file in it, copied where the disk
-     can clone, hidden ones left out */
-  ipcMain.handle('desktop:import-file', async (event, request) => {
-    if (!fromPage(event) || !studio) return { ok: false, error: 'Studio is not running.' };
-    const projectId = String(request?.projectId ?? '');
-    if (!/^[\w-]+$/.test(projectId)) return { ok: false, error: 'No project is open.' };
-    const name = basename(String(request?.name ?? '')).replace(/[\u0000-\u001f/\\]+/g, '').slice(0, 200) || 'file';
-    const path = typeof request?.path === 'string' ? request.path : '';
-    if (!path) return { ok: false, error: 'That file is not there any more.' };
-    let info;
-    try { info = statSync(path); } catch { return { ok: false, error: 'That file is not there any more.' }; }
-    if (info.isDirectory()) {
-      try {
-        const res = await fetch(`${studio.origin}/api/projects/${encodeURIComponent(projectId)}/files/bring`, {
-          method: 'POST', headers: { 'x-studio-key': studio.key, 'content-type': 'application/json' },
-          body: JSON.stringify({ into: 'assets/upload', mode: 'copy', paths: [path] }),
-        });
-        const answer = await res.json().catch(() => ({}));
-        return res.ok && answer.landed?.[0] ? { ok: true, path: answer.landed[0], folder: true } : { ok: false, error: answer.error ?? `Studio answered ${res.status}` };
-      } catch (error) { return { ok: false, error: error.message }; }
-    }
-    if (!info.isFile()) return { ok: false, error: 'That is not a file.' };
-    try {
-      const res = await fetch(`${studio.origin}/api/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(`assets/upload/${name}`)}`, {
-        method: 'PUT', headers: { 'x-studio-key': studio.key }, body: Readable.toWeb(createReadStream(path)), duplex: 'half',
-      });
-      const answer = await res.json().catch(() => ({}));
-      return res.ok ? { ok: true, path: answer.path } : { ok: false, error: answer.error ?? `Studio answered ${res.status}` };
-    } catch (error) { return { ok: false, error: error.message }; }
-  });
   ipcMain.handle('desktop:reveal', (event, path) => { if (fromPage(event) && typeof path === 'string' && path) shell.showItemInFolder(path); });
   ipcMain.handle('desktop:pick-folder', (event, options) => (fromPage(event) ? pickFolder(options) : null));
   /* a picture of part of the window (the viewer, for a reference in the chat): what the person sees, as JPEG */
@@ -608,6 +607,7 @@ async function start() {
     beforeInstall: async () => {
       quitting = true;
       localAgents?.closeAll();
+      closeEverySession();
       for (const v of views.values()) v.webContents.on('will-prevent-unload', (event) => event.preventDefault());
       await studio?.quit();
       updates?.close();
@@ -673,6 +673,7 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', (event) => {
   quitAfterStudio(event, {
     quitting, markQuitting: () => { quitting = true; }, studio,
-    closeAgents: () => localAgents?.closeAll(), quit: () => app.quit(),
+    /* and the ones opened only to ask (signed in? its options?), which belong to no chat */
+    closeAgents: () => { localAgents?.closeAll(); closeEverySession(); }, quit: () => app.quit(),
   });
 });

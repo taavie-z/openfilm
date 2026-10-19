@@ -30,7 +30,7 @@ import { ownHost, startPages } from './pages.mjs';
 import { HttpError, cookie, json, readJson } from './http.mjs';
 import { acceptWebSocket } from './websocket.mjs';
 import {
-  ProjectError, createFolder, createProject, deleteFolder, deleteProject, libraryRoot, listFolders, listProjects, locateProject, markOpened,
+  ProjectError, createFolder, createProject, deleteFolder, deleteProject, libraryRoot, listFolders, listProjects, locateProject, markOpened, moveLibrary,
   moveProjectToFolder, openProject, projectById, renameFolder, renameProject, studioHome, studioKey, TOOL_DIR,
 } from './projects.mjs';
 import { FetchError, createFetches, fetchFilm, parseRepoUrl } from './fetch-repo.mjs';
@@ -39,12 +39,14 @@ import { exampleFile, exampleFolder, listExamples } from './examples.mjs';
 import { pickFiles, pickFolder } from './folder-picker.mjs';
 import { readPrefs, writePrefs } from './prefs.mjs';
 import { ensureProxies } from './proxies.mjs';
+import { ensurePreviews, knownLate } from './preview-cache.mjs';
 import { npmOpenfilm, olderThanThis } from '../client.mjs';
 import { writeAtomic } from './atomic.mjs';
 import { createWatchers } from './watch.mjs';
 import { installedFonts } from './fonts.mjs';
 import { projectFonts, resolveIn } from './project-fonts.mjs';
 import { FILM_PAGE, PageFrameError, closePageFrames, filmPoster, pageFacts, pageFrame, warmFilmPoster } from './pageframes.mjs';
+import { COVER_FRAME_W, CoverError, clearCover, readCover, readCoverBody, setCover, setCoverFromFile } from './cover.mjs';
 import { SavedError, bundlePoster, libraryPath, libraryRel, libraryRoot as savedLibrary, listLibrary, saveClip, saveFile, saveGroup, takeSaved } from './saved.mjs';
 import { FILM_FILE, clipKind, isPage } from '../../src/film-doc.mjs';
 import { listSkills, skillOrigins } from '../../src/skills.mjs';
@@ -54,7 +56,10 @@ import { projectSettingsRoute } from './project-settings.mjs';
 import { markersRoute } from './markers.mjs';
 import { transitionPageRoutes } from './transition-pages.mjs';
 import { createAsks, getRoute, subtitleTranscriber, subtitleTranslator } from './get.mjs';
-import { LOCATION_KEYS, locations, usableFolder } from '../../src/locations.mjs';
+import { LOCATION_KEYS, chooseFolder, locations, usableFolder } from '../../src/locations.mjs';
+import { doctor } from '../../src/doctor.mjs';
+import { recentProblems } from '../../src/problems.mjs';
+import { exportDiagnostics } from './diagnostics.mjs';
 
 /** @typedef {import('./http.mjs').Req} Req @typedef {import('./http.mjs').Res} Res */
 
@@ -242,6 +247,25 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       return json(res, 200, { version: VERSION, latest, newer: Boolean(latest && olderThanThis(VERSION, latest)), checkedAt, checking: !process.env.OPENFILM_NO_UPDATE_CHECK && !FROM_SOURCE, source: FROM_SOURCE,
         ...(updating ? { update: updating } : {}) });
     }
+    /* Settings → Developer's diagnostic report: `openfilm doctor` (src/doctor.mjs), as this Studio sees the computer */
+    if (parts[0] === 'doctor' && parts.length === 1 && req.method === 'GET') {
+      const report = await doctor({ studio: { origin, version: VERSION, ...(stays ? { app: true } : {}) } });
+      return json(res, 200, { ok: report.ok, text: report.text });
+    }
+    /* Settings → Developer: the problems of the last two weeks (src/problems.mjs), newest first */
+    if (parts[0] === 'diagnostics' && parts[1] === 'problems' && parts.length === 2 && req.method === 'GET') {
+      return json(res, 200, { problems: recentProblems().reverse() });
+    }
+    /* Settings → Developer's diagnostic file (diagnostics.mjs): the report the page made, and the rest, as a zip in the
+       exports folder, shown in the file manager */
+    if (parts[0] === 'diagnostics' && parts[1] === 'export' && parts.length === 2 && req.method === 'POST') {
+      const { report, conversations } = /** @type {{ report?: unknown, conversations?: unknown }} */ ((await readJson(req).catch(() => null)) ?? {});
+      const text = typeof report === 'string' && report.trim() ? report
+        : (await doctor({ studio: { origin, version: VERSION, ...(stays ? { app: true } : {}) } })).text;
+      const made = await exportDiagnostics({ report: text, conversations: conversations === true });
+      reveal(made.path);
+      return json(res, 200, made);
+    }
     /* the top bar's Update (Studio run with npm, not the app's nor a checkout): the newest openfilm run in the
        background as `openfilm update` (client.mjs updateOpenfilm), which starts Studio again on it; the pages come back
        on the new version and reload. Not while an export runs or media is made. `/api/version` says how it goes */
@@ -350,6 +374,16 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
     /* where new projects go (src/locations.mjs): the folder, its default, and its disk's free space; a POST opens it
        in the system's file manager */
     if (parts[0] === 'locations' && parts.length === 1 && req.method === 'GET') return json(res, 200, locations());
+    /* the library moved (projects.mjs moveLibrary): { path } (null: the default), and with `move` its projects go too */
+    if (parts[0] === 'locations' && parts[1] === 'projects' && parts.length === 2 && req.method === 'PUT') {
+      const { path: asked, move } = /** @type {{ path?: unknown, move?: unknown }} */ (await readJson(req) ?? {});
+      let to = null;
+      if (asked != null) {
+        try { to = usableFolder(asked); } catch (e) { throw new HttpError(400, /** @type {Error} */ (e).message); }
+      }
+      const done = await moveLibrary(to, { move: move === true, choose: (folder) => chooseFolder('projectsFolder', folder) });
+      return json(res, 200, { ...done, locations: locations() });
+    }
     if (parts[0] === 'locations' && parts[1] === 'projects' && parts.length === 2 && req.method === 'POST') {
       const folder = locations()[parts[1]].path;
       mkdirSync(folder, { recursive: true });
@@ -483,6 +517,8 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
         const renamed = await renameProject(project.id, String(name ?? ''));
         /* its address stays: the preview open on it keeps loading from the folder by its new name */
         pages.folderUrl(renamed);
+        /* the pages showing it (renamed from another tab, or the projects list) take the new name */
+        watchers.emit(project.path, { type: 'project', project: renamed });
         return json(res, 200, { project: renamed });
       }
       /* the project is deleted: its folder goes to the Trash (pages showing it go back to the list) */
@@ -629,6 +665,19 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       const videos = (await listFiles(project.path)).files.filter((f) => f.kind === 'video').map((f) => f.path);
       return json(res, 200, { on: true, height: proxies.height, states: await ensureProxies(project.path, videos, proxies.height) });
     }
+    /* renders of the stretches the preview played late (preview-cache.mjs), asked for when not made yet: each one's
+       name and state, at the proxies' size */
+    if (rest === 'preview-cache' && (req.method === 'POST' || req.method === 'GET')) {
+      /* GET: the stretches known to play late (from an earlier session) and theirs */
+      const { ranges, fps } = /** @type {{ ranges?: unknown, fps?: unknown }} */ (req.method === 'GET'
+        ? { ranges: knownLate(project.path), fps: url.searchParams.get('fps') }
+        : await readJson(req));
+      const rate = Number(fps);
+      const list = Array.isArray(ranges) ? ranges.filter((r) => Array.isArray(r) && r.length === 2 && r.every(Number.isFinite) && r[1] > r[0] && r[0] >= 0).slice(0, 50) : [];
+      if (!(rate > 0 && rate <= 240)) throw new HttpError(400, 'fps: a frame rate');
+      const { proxies } = readPrefs();
+      return json(res, 200, { late: list, ranges: list.length ? ensurePreviews(project.path, /** @type {[number, number][]} */ (list), rate, proxies.height) : [] });
+    }
     /* what a link leads to copied into the project in its place (files.mjs collect) */
     if (rest === 'files/collect' && req.method === 'POST') {
       const { path: rel } = /** @type {{ path?: unknown }} */ (await readJson(req));
@@ -768,8 +817,40 @@ export async function startStudio({ port = 4747, key, openBrowser = systemBrowse
       else openFile(file);
       return json(res, 200, {});
     }
-    /* the film's middle frame: the project's card in the projects list */
+    /* the project's own cover (cover.mjs): PUT a picture's bytes; POST `{ path }`, a picture of the project, or `{ ms }`,
+       the film at that moment; DELETE, none of its own (the film's poster again). Answers when it was set (null: none) */
+    if (rest === 'cover') {
+      const set = (/** @type {{ at: number } | null} */ cover) => json(res, 200, { cover: cover?.at ?? null });
+      try {
+        if (req.method === 'PUT') return set(await setCover(project.path, await readCoverBody(req)));
+        if (req.method === 'POST') {
+          const { path: rel, ms } = /** @type {{ path?: unknown, ms?: unknown }} */ (await readJson(req));
+          if (typeof rel === 'string' && rel) return set(await setCoverFromFile(project.path, readable(project.path, rel)));
+          if (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0) {
+            const jpeg = await pageFrame(project.path, pages.folderUrl(project), FILM_PAGE, ms, COVER_FRAME_W).catch((e) => {
+              throw new HttpError(e instanceof PageFrameError ? 404 : 422, String(e?.message ?? e));
+            });
+            return set(await setCover(project.path, jpeg));
+          }
+          throw new HttpError(400, 'a picture of the project (path) or a moment of the film (ms)');
+        }
+        if (req.method === 'DELETE') {
+          await clearCover(project.path);
+          return set(null);
+        }
+      } catch (e) {
+        if (e instanceof CoverError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+    }
+    /* the project's card in the projects list: its own cover, else the film's middle frame */
     if (rest === 'poster' && req.method === 'GET') {
+      const cover = await readCover(project.path);
+      if (cover) {
+        const picture = await readFile(cover.path);
+        res.writeHead(200, { 'content-type': cover.type, 'cache-control': 'private, max-age=60', 'content-length': picture.length });
+        return res.end(picture);
+      }
       /* a film with nothing in it yet has no picture to show (its card shows its own face, not a black frame) */
       const { doc } = await readProjectFilm(project.path);
       if (!doc?.tracks.some((t) => t.clips.length)) throw new HttpError(404, 'the film is empty');

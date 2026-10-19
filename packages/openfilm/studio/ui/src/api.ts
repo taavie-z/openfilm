@@ -11,7 +11,8 @@ export interface StudioVersion { version: string; latest: string | null; newer: 
   /** the update Studio runs from the top bar (lib/web-update), or one that failed */
   update?: { status: 'updating' | 'failed'; version: string; error?: string } }
 
-export type Project = { id: string; path: string; name: string; openedAt: number; missing: boolean; working?: boolean };
+/** `cover`: when the person set a cover of its own (studio/server/cover.mjs), absent when it has none. */
+export type Project = { id: string; path: string; name: string; openedAt: number; missing: boolean; working?: boolean; cover?: number };
 export type Clip = { src: string; id: string; at?: number; time?: [number] | [number, number];
   box?: { x: number; y: number; w?: number; h?: number; r?: number }; volume?: number; speed?: number; overrides?: unknown[];
   /** a page that sets no size of its own: the px it is laid out at (the stage's without it) */
@@ -78,21 +79,45 @@ const p = (id: string) => `projects/${encodeURIComponent(id)}`;
 
 /** Studio's own preferences, the same for every project (studio/server/prefs.mjs). */
 export interface StudioPrefs { proxies: { on: boolean; height: 540 | 720 | 1080 }; seenVersion: string | null; projectsFolder: string | null }
-/** Where new projects and exports go (src/locations.mjs): the folder, its default, whether the person chose it, the free space on its disk. */
-export interface StudioLocation { path: string; default: string; chosen: boolean; free: number | null }
+/** Where the projects library is (src/locations.mjs): the folder, its default, whether the person chose it, the free space on its disk, how many projects are in it. */
+export interface StudioLocation { path: string; default: string; chosen: boolean; free: number | null; count: number }
 export interface StudioLocations { projects: StudioLocation }
 /** Said on the window when they change, for what plays by them (the preview's proxies). */
 export const PREFS_EVENT = 'openfilm:prefs';
+/** Said on the window when the library moved, for the Projects list. */
+export const LIBRARY_EVENT = 'openfilm:library';
+
+/** A problem as Studio keeps it (src/problems.mjs): when, what it was about, what it said. */
+export interface StudioProblem {
+  t: string;
+  area: string;
+  what: string;
+  agent?: string;
+  step?: string;
+}
 
 export const api = {
   /** this Studio's version and the latest openfilm on npm; `check`: ask npm now */
   version: (check = false) => call<StudioVersion>(`version${check ? '?check=1' : ''}`),
   /** the newest openfilm, run in the background (`openfilm update`): Studio starts again on it; refused (ApiError, `body.code`) while busy */
   update: () => call<{ update: NonNullable<StudioVersion['update']> }>('update', { method: 'POST', json: {} }),
+  /** `openfilm doctor`, run by this Studio: the report to paste into an issue (src/doctor.mjs) */
+  doctor: () => call<{ ok: boolean; text: string }>('doctor'),
+  /** what went wrong in the last two weeks, newest first (src/problems.mjs) */
+  problems: () => call<{ problems: StudioProblem[] }>('diagnostics/problems').then((r) => r.problems),
+  /** the diagnostic file (server/diagnostics.mjs): `report` and the rest, zipped into the exports folder and shown there */
+  exportDiagnostics: (report: string, conversations: boolean) => call<{ path: string; files: string[]; conversations: boolean }>('diagnostics/export', { method: 'POST', json: { report, conversations } }),
   projects: () => call<{ projects: Project[] }>('projects').then((r) => r.projects),
   prefs: () => call<StudioPrefs>('prefs'),
   /** where new projects and exports go, and the free space there */
   locations: () => call<StudioLocations>('locations'),
+  /** move the library to `path` (null: the default); with `move`, its projects go too (those that could not are in `failed`) */
+  moveLibrary: (path: string | null, move: boolean) => call<{ moved: number; failed: { name: string; error: string }[]; locations: StudioLocations }>('locations/projects', { method: 'PUT', json: { path, move } }).then((done) => {
+    window.dispatchEvent(new Event(LIBRARY_EVENT));
+    return done;
+  }),
+  /** a project's folder, shown in the system's file manager */
+  revealProject: (id: string) => call<object>(`projects/${encodeURIComponent(id)}/reveal`, { method: 'POST', json: {} }),
   /** one of them in the system's file manager */
   openLocation: (which: keyof StudioLocations) => call<{ ok: true }>(`locations/${which}`, { method: 'POST', json: {} }),
   setPrefs: (patch: { proxies?: Partial<StudioPrefs['proxies']>; seenVersion?: string; projectsFolder?: string | null }) => call<StudioPrefs>('prefs', { method: 'PATCH', json: patch }).then((prefs) => {
@@ -127,6 +152,11 @@ export const api = {
   ),
   /** a video's frame (`ms` of its own time) made a still beside it; answers its path */
   freezeFrame: (id: string, path: string, ms: number) => call<{ path: string }>(`${p(id)}/files/still`, { method: 'POST', json: { path, ms } }).then((r) => r.path),
+  /** The project's own cover for its card (studio/server/cover.mjs): a picture from this computer, a picture of the project,
+      the film at `ms`, or none (null: its film's poster again). Each answers when it was set. */
+  setCover: (id: string, from: { file: Blob } | { path: string } | { ms: number }) => call<{ cover: number | null }>(`${p(id)}/cover`,
+    'file' in from ? { method: 'PUT', body: from.file, headers: { 'content-type': 'application/octet-stream' } } : { method: 'POST', json: from }).then((r) => r.cover),
+  clearCover: (id: string) => call<{ cover: null }>(`${p(id)}/cover`, { method: 'DELETE' }).then(() => null),
   answerAsk: (askId: string, allow: boolean) => call<{ answered: boolean }>(`get/asks/${encodeURIComponent(askId)}`, { method: 'POST', json: { allow } }),
   /** the provider's own page for its balance, opened in the person's browser */
   openBilling: (providerId: string) => call<Record<string, never>>(`providers/${encodeURIComponent(providerId)}/billing`, { method: 'POST' }),
@@ -158,7 +188,7 @@ export type StudioNotice = { id: string; kind: 'balance'; provider: string; prov
 
 export type FolderEvent = { type: 'film'; rev: string } | { type: 'files'; paths?: string[] } | { type: 'history' } | { type: 'export'; job: ExportJob } | { type: 'open'; to: string }
   | { type: 'history-progress'; op: string; phase: string; done: number; total: number }
-  | { type: 'ask'; ask: SpendAsk } | { type: 'asked'; id: string } | { type: 'notice'; notice: StudioNotice };
+  | { type: 'ask'; ask: SpendAsk } | { type: 'asked'; id: string } | { type: 'notice'; notice: StudioNotice } | { type: 'project'; project: Project };
 
 /**
  * Listen to a stream of events (a WebSocket: a browser's six HTTP connections to Studio stay free for the page's

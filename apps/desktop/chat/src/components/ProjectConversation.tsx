@@ -2,7 +2,7 @@
 
 import React from 'react';
 import type { PublicProgressSnapshot, TurnAttachment } from '@openfilm/shared';
-import { BellRing, Check, ChevronRight, Copy, Play } from 'lucide-react';
+import { BellRing, Check, ChevronRight, Copy } from 'lucide-react';
 import { AgentActivityList, formatWorkDuration, StatusLine, type AgentActivityItem } from './AgentActivityRow';
 import { AgentIcon, hasAgentIcon } from './AgentIcons';
 import { BrandLogo } from './BrandLogo';
@@ -28,6 +28,9 @@ import { TurnLogButton } from './TurnLog';
 import { FileChangesList } from './FileChangesList';
 import { ChatProjectContext, useDeveloperMode, useShowChanges } from '@/lib/developer';
 import { isVideoAttachment } from '@/lib/composer-attachments';
+import { desktopBridge } from '@/lib/desktop-bridge';
+import { attachmentPlace } from '@/lib/attachment-place';
+import { ATTACHMENT_CARD, ATTACHMENT_THUMB, AttachmentCardBody, PlayMark } from './AttachmentCard';
 
 /** What past turns get as "no live process". One constant: a new array each time would defeat the memo. */
 const NO_TRANSCRIPT: TranscriptItem[] = [];
@@ -404,7 +407,8 @@ const ConversationTurn = React.memo(function ConversationTurn({
       {/* Still running: one status line, always one line high, only its text changes (see StatusLine), and the
           footer under it on hover (its Log is the turn so far). Done, the footer alone. Always there, in one place
           in the tree: a log opened from it stays open as the turn finishes. An interruption doesn't
-          show Failed here: the reason and Resume appear above the composer, as in Cursor. */}
+          show Failed here: the reason and Resume appear above the composer (the last turn's, even after a
+          restart); an older one's reason is on its footer's Interrupted, on hover. */}
       {running ? <StatusLine items={rows ?? NO_ROWS} fallback={liveActivity} ownAgent={entry.agent === 'byok'} /> : null}
       <TurnFooter entry={entry} items={items} running={running} />
       </div>
@@ -475,36 +479,32 @@ function TurnAttachments({ items }: { items: TurnAttachment[] }) {
           : (item.thumb
             ? { name: item.name, kind: item.kind, url: item.thumb, thumbOnly: true }
             : null);
-        /* 32px squares: a receipt, not a gallery. Enough to recognize what was sent; open one to see it. The
-           smaller they are, the higher the text sits, and the bubble reads as a sentence, not an attachment list. */
-        const shell = item.thumb
-          ? 'relative h-8 w-8 overflow-hidden rounded-[6px] border border-[var(--border)] bg-[var(--surface)]'
-          : 'flex h-8 min-w-0 max-w-[132px] items-center gap-1 overflow-hidden rounded-[6px] border border-[var(--border)] bg-[var(--surface)] px-1.5';
+        /* as each was in the composer: a square for a picture, a card for anything else */
+        const shell = `${item.thumb ? ATTACHMENT_THUMB : ATTACHMENT_CARD} border-[var(--border)]`;
         /* a video's thumbnail is a frame of it: a play mark says it is not a picture */
         const inner = item.thumb ? (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={item.thumb} alt={item.name} className="h-full w-full object-cover" />
-            {isVideoAttachment(item) ? (
-              <span aria-hidden className="pointer-events-none absolute inset-0 m-auto flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/55">
-                <Play size={7} className="translate-x-[0.5px] fill-white text-white" />
-              </span>
-            ) : null}
+            {isVideoAttachment(item) ? <PlayMark /> : null}
           </>
         ) : (
-          <>
-            <AttachmentTypeIcon file={item} size={11} className="shrink-0 text-[var(--chat-hint)]" />
-            <span className="truncate text-[11px] text-[var(--chat-hint)]">{item.name}</span>
-          </>
+          <AttachmentCardBody
+            icon={<AttachmentTypeIcon file={item} size={14} />}
+            name={item.name.replace(/\/$/, '')}
+            detail={item.path ? attachmentPlace(item.path) : null}
+          />
         );
 
-        return preview ? (
+        /* a folder stays where it was on the disk: clicked, it is shown there */
+        const folderPath = item.path;
+        return preview || folderPath ? (
           <button
             key={`${item.name}-${index}`}
             type="button"
-            title={item.name}
-            aria-label={t('composer.openAttachment').replace('{name}', item.name)}
-            onClick={() => setOpen(preview)}
+            title={folderPath ?? item.name}
+            aria-label={t(folderPath ? 'composer.revealFolder' : 'composer.openAttachment').replace('{name}', item.name)}
+            onClick={() => (folderPath ? void desktopBridge()?.revealPath(folderPath) : setOpen(preview))}
             className={`${shell} transition hover:border-[var(--border-strong)]`}
           >
             {inner}
@@ -698,7 +698,7 @@ function TurnFooter({ entry, items, running = false }: { entry: ProjectVersion; 
         </span>
       ) : when ? <span>{when}</span> : null}
       {outcome ? (
-        <span className={entry.outcome === 'stopped' ? '' : 'text-[var(--warn)]'}>
+        <span className={entry.outcome === 'stopped' ? '' : 'text-[var(--warn)]'} title={entry.error}>
           {entry.agent || when ? '· ' : ''}{outcome}
         </span>
       ) : null}

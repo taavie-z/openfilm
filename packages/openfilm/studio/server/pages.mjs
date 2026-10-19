@@ -29,6 +29,8 @@ import { readableLink } from '../../src/media-links.mjs';
 import { clipKind } from '../../src/film-doc.mjs';
 import { readPrefs } from './prefs.mjs';
 import { readyProxy } from './proxies.mjs';
+import { madeCopy } from '../../src/seekable.mjs';
+import { isPreviewKey, previewDir } from './preview-cache.mjs';
 import { soundOf } from './derived.mjs';
 
 const BRIDGE = readFileSync(new URL('./bridge.js', import.meta.url), 'utf8');
@@ -70,6 +72,12 @@ async function playableCopy(root, rel) {
   return made;
 }
 const STAGE = readFileSync(new URL('./stage.js', import.meta.url), 'utf8');
+/*
+ * A page in the preview's film draws at the pixels the viewer shows it at: its devicePixelRatio is the one the editor
+ * put in the film's address (`film-dpr`, editor/Preview.tsx), so a canvas sized by it (SPEC §3) is no larger than what is
+ * seen. The film's own videos and pictures, and every page drawn for an export, are as the screen is.
+ */
+const PAGE_SCALE = `(()=>{try{if(parent===window)return;const k=Number(new URL(parent.location.href).searchParams.get('film-dpr'));if(k>0)Object.defineProperty(window,'devicePixelRatio',{configurable:true,get:()=>k})}catch{}})();`;
 
 /**
  * Whether a request was addressed to this machine at `port` by name (its Host): another site whose name is made to
@@ -121,14 +129,15 @@ export async function startPages({ port, editorOrigin, secret, projects }) {
   /* the timeline page (the preview) gets the bridge and the stage; a web page gets the bridge too, so the editor can
      play one on its own (the media pane's viewer) — inside the timeline it stays quiet: its parent is not the editor */
   const filesOf = (/** @type {string} */ root) => folderFiles(root, {
-    inject: `<script>${HOST_FLAG}</script>${scripts(BRIDGE)}`,
+    inject: `<script>${HOST_FLAG}${PAGE_SCALE}</script>${scripts(BRIDGE)}`,
     timelineInject: `<script>${HOST_FLAG}</script>${scripts(BRIDGE, STAGE)}`,
     headers: policy(),
-    /* heavy footage is played from its proxy once it is made, while proxies are on (proxies.mjs): the preview only */
+    /* heavy footage is played from its proxy once it is made, while proxies are on (proxies.mjs); else from a copy made
+       for footage the browser does not decode, or that seeks slowly (src/seekable.mjs), when there is one */
     swap: (file) => {
       if (clipKind(file) !== 'video') return null;
       const { proxies } = readPrefs();
-      return proxies.on ? readyProxy(root, relative(root, file).split(sep).join('/'), proxies.height) : null;
+      return (proxies.on ? readyProxy(root, relative(root, file).split(sep).join('/'), proxies.height) : null) ?? madeCopy(file, root);
     },
   });
 
@@ -173,6 +182,13 @@ export async function startPages({ port, editorOrigin, secret, projects }) {
       if (file === undefined) { res.writeHead(404, headers).end('not found'); return; }
       if (!file) { res.writeHead(204, headers).end(); return; }
       if (!folderFiles(dirname(file), { headers: policy() })(req, res, `/${basename(file)}`, url.searchParams)) res.writeHead(403, headers).end();
+      return;
+    }
+    /* a stretch of the film rendered for the preview to play in its place (preview-cache.mjs): its cache, not the
+       project's files */
+    const render = /^\/__film\/preview\/([0-9a-f]+)\.mp4$/.exec(plain);
+    if (render && isPreviewKey(render[1])) {
+      if (!folderFiles(previewDir(entry.root), { headers: policy() })(req, res, `/${render[1]}.mp4`, url.searchParams)) res.writeHead(403, headers).end();
       return;
     }
     if (UNPLAYABLE.test(plain)) {

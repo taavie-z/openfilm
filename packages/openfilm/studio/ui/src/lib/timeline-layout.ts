@@ -5,6 +5,7 @@
  * clip turns a division into Infinity, a wrong ruler step only looks "a bit dense", a wrong track index shows the
  * wrong name on a row.
  */
+import { layerBlocks } from '../../../server/track-layout.mjs';
 import { clipSpan } from '../../../../src/film-doc.mjs';
 import { fileStem, filmTrackBadges, filmTrackKind, filmTrackPrefix, type FilmBox } from './film.ts';
 
@@ -234,8 +235,7 @@ function clamp(n: number, lo: number, hi: number): number {
 
 /**
  * Label and tick spacing, worked out separately: labels need room to read (≥96 px), ticks are lines and can sit
- * 12 px apart. One shared spacing forces a choice between overlapping labels and ticks too sparse to aim by (OpenCut's
- * approach, which it says is CapCut's table).
+ * 12 px apart. One shared spacing would force a choice between overlapping labels and ticks too sparse to aim by.
  *
  * Steps are in frames of the project's rate, then whole seconds, because frames are what gets lined up: a
  * "1/2/5 × 10ⁿ ms" family gives 200 ms steps that are neither whole seconds nor whole frames. A step shorter than a
@@ -421,7 +421,7 @@ export interface TimelineTrack {
   /** Row title. */
   name: string | null;
   /**
-   * The row's badge: `P1` / `V2` / `A1`, the Premiere / Resolve naming (pictures counted bottom up, sound top
+   * The row's badge: `P1` / `V2` / `A1` (pictures counted bottom up, sound top
    * down), one per drawn row (rows of one track spread by overlap each get their own, see badgeRows).
    */
   badge?: string;
@@ -439,8 +439,8 @@ export interface TimelineTrack {
   /** How tall the row is drawn, px, when the person set it (lib/track-heights); else the timeline's own for its kind. */
   height?: number;
   /**
-   * The main track's rows: the lowest picture track, where the magnet acts (lib/timeline-edit mainTrackOf), marked and
-   * drawn taller as CapCut draws its main track.
+   * The main track's rows: the lowest picture track, where the magnet and linkage act (lib/timeline-edit mainTrackOf),
+   * marked and drawn taller than the others.
    */
   main?: boolean;
   blocks: TimelineBlock[];
@@ -572,25 +572,8 @@ export function blockTitleOf(block: { title: string; atRef?: string | undefined;
   return notes.length ? `${block.title} · ${notes.join(' · ')}` : block.title;
 }
 
-/**
- * Clips that overlap by no more than this touch (SPEC): times are kept to the millisecond, a clip's start and its
- * length each rounded alone, so two that touch can overlap by one.
- */
-const TOUCH_MS = 1;
-
-/**
- * Lay clips into rows that do not overlap. Two clips overlapping on one row cannot be drawn honestly, so an overlap
- * opens another row. Greedy (the first row it fits), so the rows stay stable: drawing the same film again must not
- * move the clip just clicked.
- */
-function layered(blocks: Block[]): Block[][] {
-  const rows: Block[][] = [];
-  for (const block of [...blocks].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)) {
-    const row = rows.find((r) => (r.at(-1)?.endMs ?? 0) <= block.startMs + TOUCH_MS);
-    if (row) row.push(block); else rows.push([block]);
-  }
-  return rows;
-}
+/** The same row allocation is used when exporting Studio's row names. */
+const layered = layerBlocks;
 
 /**
  * Each clip where film.html puts it now.
@@ -654,7 +637,7 @@ function docTrackKind(track: Record<string, unknown>): string {
 }
 
 /**
- * Row badges, Premiere / Resolve style: P1, P2… for page tracks, V1… for picture tracks, A1… for sound tracks, counted
+ * Row badges: P1, P2… for page tracks, V1… for picture tracks, A1… for sound tracks, counted
  * from position and kind, never read from the film (filmTrackBadges).
  *
  * Counted per drawn row, not per film.html track: a track spread into four rows by overlap is A2, A3, A4, A5 and the

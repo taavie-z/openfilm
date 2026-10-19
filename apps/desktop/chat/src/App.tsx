@@ -6,13 +6,15 @@
  * (lib/local-agent-run's saved turns).
  */
 import React from 'react';
-import { ArrowDown, Blocks, Coins, CornerDownLeft, LibraryBig, Loader2, Play, Plus, ShieldQuestion, Square, SquareSlash, X } from 'lucide-react';
+import { ArrowDown, Blocks, Coins, CornerDownLeft, LibraryBig, Loader2, Plus, ShieldQuestion, Square, SquareSlash, X } from 'lucide-react';
 import { buildPromptDisplay, type Turn } from '@openfilm/shared';
 import { useT, useUiLocale } from '@/i18n';
 import { ConversationSessionBar } from '@/components/ConversationSessionBar';
 import { ProjectConversation, primeStoredTranscript } from '@/components/ProjectConversation';
 import { ProjectStarters } from '@/components/ProjectStarters';
 import { AttachmentPreview, type AttachmentPreviewItem } from '@/components/AttachmentPreview';
+import { ATTACHMENT_CARD, ATTACHMENT_THUMB, AttachmentCardBody, PlayMark } from '@/components/AttachmentCard';
+import { attachmentPlace } from '@/lib/attachment-place';
 import { ModelPopover } from '@/components/ModelPopover';
 import { AddSkillDialog, type PickedSkill } from '@/components/AddSkill';
 import { CardActions, CardButton, ComposerCard } from '@/components/ComposerCard';
@@ -22,7 +24,7 @@ import { StickToBottomContext, useStickToBottom, useTailSpacer } from '@/compone
 import { PromptEditor, PromptPill, PromptPillHoverContext, PromptPillRevealContext, activatedSkillIds, fileReferenceId, fileReferencePath, promptReferenceToken, resolvePromptReferences, skillReferenceId, skillReferencePackage, splitPromptReferenceText, type MentionProvider, type PromptEditorHandle, type PromptEditorState, type PromptPillHover, type PromptReference } from '@/components/prompt-editor';
 import { filesFromTransfer, transferHasFiles } from '@/lib/composer-attachments';
 import { attachmentIcon } from '@/lib/project-resources';
-import { attachedPictures, attachedText, attachmentBlocker, formatFileSize, turnAttachments, useDesktopAttachments } from '@/lib/desktop-attachments';
+import { PROMPT_PICTURES_MAX, attachedPictures, attachedText, attachmentBlocker, formatFileSize, turnAttachments, useDesktopAttachments } from '@/lib/desktop-attachments';
 import { deriveProjectTurns } from '@/lib/project-versions';
 import { makePlaceholder, mergeAssetLists } from '@/lib/asset-lists';
 import { isEmptyBackgroundTurn } from '@/lib/unprompted';
@@ -51,11 +53,12 @@ import {
   type LocalAgentTurn,
   type LocalTranscriptStore,
 } from '@/lib/local-agent-run';
-import type { LocalAgentId, LocalAgentTurnMeta, PromptImage } from '@/lib/desktop-bridge';
+import { desktopBridge, type LocalAgentId, type LocalAgentTurnMeta, type PromptImage } from '@/lib/desktop-bridge';
 import { referencePictures } from '@/lib/ref-pictures';
 import type { TurnFileChanges } from '@/lib/file-changes';
 import { readBalance, type TurnBalance } from '@/lib/balance';
 import { BalanceNotice } from '@/components/BalanceNotice';
+import { CopyDiagnostics } from '@/components/CopyDiagnostics';
 import { readStudioFilm } from '@/lib/studio-film';
 import { studioRefsFromTransfer, transferHasStudioRefs } from '@/lib/studio-transfer';
 import { agentModelSummary, agentOptions, currentAgent, effectivePrefs, offeredOption, useLocalAgents } from '@/state/local-agent-store';
@@ -84,14 +87,6 @@ const CONTEXT_NOTICE_SHARE = 0.85;
 /* between the chat's root (the add-skill dialog) and the project's chat: a skill added, a skill to make */
 const SKILLS_CHANGED = 'openfilm:skills-changed';
 const MAKE_SKILL = 'openfilm:make-skill';
-
-function PlayMark() {
-  return (
-    <span aria-hidden className="pointer-events-none absolute inset-0 m-auto flex h-4 w-4 items-center justify-center rounded-full bg-black/55">
-      <Play size={8} className="translate-x-[0.5px] fill-white text-white" />
-    </span>
-  );
-}
 
 export function App({ initialProject, initialSelection, initialFfmpeg }: {
   initialProject: Project | null;
@@ -244,6 +239,8 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
   const opLog = React.useMemo(() => (blank ? [] : deriveProjectTurns(ordered, [], asset?.id ?? null)), [blank, ordered, asset?.id]);
 
   const localTurn = useLocalAgentTurn(asset?.id ?? null);
+  /* why the last turn failed: as it happened, or, the chat opened again on it (the app restarted), as it was kept */
+  const turnError = localTurn ? localTurn.state.error : asset?.status === 'error' && !(asset as Turn & TurnBalance).balance ? asset.error ?? null : null;
   const liveStore = localTurn?.turn.store ?? EMPTY_STORE;
   const activity = useLiveActivityFromStore(liveStore, localTurn?.state.thinking ?? false, false);
 
@@ -280,7 +277,7 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
   const [studioRefs, setStudioRefs] = React.useState<Map<string, StudioRef>>(() => new Map());
   const [queued, setQueued] = React.useState(false);
   const [followUpError, setFollowUpError] = React.useState<string | null>(null);
-  const composerFiles = useDesktopAttachments();
+  const composerFiles = useDesktopAttachments(project.path);
   /* a file of the message being written, opened to look at */
   const [openedFile, setOpenedFile] = React.useState<AttachmentPreviewItem | null>(null);
   const attachInputRef = React.useRef<HTMLInputElement>(null);
@@ -705,7 +702,7 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
     /* the skills it names: each one's SKILL.md follows the message, for the agent to read */
     const skillNames = activatedSkillIds(followUpRefs);
     if (!instruction) return;
-    const blocker = attachmentBlocker(composerFiles.files);
+    const blocker = attachmentBlocker(composerFiles.files, t);
     if (blocker) { setFollowUpError(blocker); return; }
     setFollowUpError(null);
     const promptDisplay = buildPromptDisplay(followUp, followUpRefs);
@@ -726,10 +723,11 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
     /* an example pointed at: its folder fetched now if it is not yet (the turn waits, as it waits for its reply) */
     const withFolders = Promise.all(refs.map(async (ref) => (ref.kind === 'example' && !ref.folder
       ? { ...ref, folder: await app.exampleFolder?.(ref.id).catch(() => undefined) } : ref)));
+    /* the pictures sent: the references' first, then the attached ones while there is room (the rest by their path) */
     const prepared = withFolders.then((ready) => Promise.all([referencePictures(ready, { project: project.path, turnId: id }), skillTexts])
-      .then(([{ pictures, images }, skills]) => ({
+      .then(async ([{ pictures, images }, skills]) => ({
         text: said + studioReferencesText(ready, { stage, pictures }) + skills.map((s) => `\n\n${s.text}`).join(''),
-        images: [...attachedPictures(files), ...images],
+        images: [...images, ...await attachedPictures(files, PROMPT_PICTURES_MAX - images.length)],
       })));
     const opened = openTurn(id, instruction, promptDisplay ?? null, turnAttachments(files));
     if (steer && asset) steerTurn(asset.id, opened, prepared);
@@ -801,10 +799,10 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
         }`}
       >
         {composerFiles.files.length > 0 && (
-          /* whole rows: up to three show at once (a message's twelve files fit in two), only more than that scrolls */
+          /* whole rows: up to three show at once, only more than that scrolls */
           <div className="flex max-h-[144px] flex-wrap gap-1.5 overflow-y-auto px-3.5 pt-3">
             {composerFiles.files.map((file) => {
-              const Icon = attachmentIcon({ name: file.name, mediaType: file.mediaType });
+              const Icon = attachmentIcon({ name: file.name, mediaType: file.mediaType, folder: file.folder });
               const remove = (
                 <span
                   role="button"
@@ -816,33 +814,37 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
                   <X size={10} />
                 </span>
               );
-              const busy = file.state === 'importing' ? <Loader2 size={12} className="absolute inset-0 m-auto animate-spin text-white drop-shadow" /> : null;
+              const busy = file.state === 'pending' ? <Loader2 size={12} className="absolute inset-0 m-auto animate-spin text-white drop-shadow" /> : null;
               /* a picture shows itself; a video, a frame of itself with a play mark (once one is had) */
               const picture = file.kind === 'image' ? file.previewUrl : file.thumb;
-              /* clicked, it opens to look at: a picture large, a video played, a text read */
-              const open = file.previewUrl && !file.folder ? {
+              /* clicked, it opens to look at: a picture large, a video played, a text read; a folder, shown where it is */
+              const folderPath = file.folder && file.state === 'ready' ? file.path : undefined;
+              const open = file.previewUrl || folderPath ? {
                 role: 'button' as const,
                 tabIndex: 0,
-                'aria-label': t('composer.openAttachment').replace('{name}', file.name),
-                onClick: () => setOpenedFile({ name: file.name, kind: file.kind, url: file.previewUrl!, ...(file.mediaType ? { mediaType: file.mediaType } : {}) }),
+                'aria-label': t(folderPath ? 'composer.revealFolder' : 'composer.openAttachment').replace('{name}', file.name),
+                onClick: () => (folderPath
+                  ? void desktopBridge()?.revealPath(folderPath)
+                  : setOpenedFile({ name: file.name, kind: file.kind, url: file.previewUrl!, ...(file.mediaType ? { mediaType: file.mediaType } : {}) })),
                 onKeyDown: (event: React.KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); (event.currentTarget as HTMLElement).click(); } },
               } : {};
               return picture ? (
-                <div key={file.id} title={file.error ?? file.name} {...open}
-                  className={`group relative h-10 w-10 overflow-hidden rounded-[8px] border bg-[var(--surface-2)] transition ${file.previewUrl ? 'cursor-pointer' : ''} ${file.state === 'failed' ? 'border-[var(--danger)]' : 'border-[var(--border)] hover:border-[var(--border-strong)]'}`}>
+                <div key={file.id} title={file.error ?? file.path ?? file.name} {...open}
+                  className={`group ${ATTACHMENT_THUMB} transition ${file.previewUrl ? 'cursor-pointer' : ''} ${file.state === 'failed' ? 'border-[var(--danger)]' : 'border-[var(--border)] hover:border-[var(--border-strong)]'}`}>
                   <img src={picture} alt={file.name} className={`h-full w-full object-cover transition ${file.state === 'ready' ? '' : 'opacity-45'}`} />
                   {file.kind !== 'image' && !busy ? <PlayMark /> : null}
                   {busy}
                   {remove}
                 </div>
               ) : (
-                <div key={file.id} title={file.error ?? file.name} {...open}
-                  className={`group relative flex h-10 min-w-0 max-w-[150px] items-center gap-1.5 overflow-hidden rounded-[8px] border bg-[var(--surface-2)] py-1 pl-2 pr-5 transition ${file.previewUrl && !file.folder ? 'cursor-pointer' : ''} ${file.state === 'failed' ? 'border-[var(--danger)]' : 'border-[var(--border)] hover:border-[var(--border-strong)]'}`}>
-                  {file.state === 'importing' ? <Loader2 size={13} className="shrink-0 animate-spin text-[var(--text-muted)]" /> : <Icon size={13} className="shrink-0 text-[var(--text-muted)]" />}
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-[11.5px] leading-tight text-[var(--text-muted)]">{file.name}</span>
-                    <span className="truncate text-[10.5px] leading-tight text-[var(--text-faint)]">{file.state === 'failed' ? 'Not added' : file.folder ? t('composer.folder') : formatFileSize(file.size)}</span>
-                  </span>
+                <div key={file.id} title={file.error ?? file.path ?? file.name} {...open}
+                  className={`group ${ATTACHMENT_CARD} transition ${file.previewUrl || folderPath ? 'cursor-pointer' : ''} ${file.state === 'failed' ? 'border-[var(--danger)]' : 'border-[var(--border)] hover:border-[var(--border-strong)]'}`}>
+                  <AttachmentCardBody
+                    icon={file.state === 'pending' ? <Loader2 size={14} className="animate-spin" /> : <Icon size={14} />}
+                    name={file.name}
+                    /* a folder's size is not read: where it is says more */
+                    detail={file.state === 'failed' ? 'Not added' : file.folder ? (file.path ? attachmentPlace(file.path) : null) : formatFileSize(file.size)}
+                  />
                   {remove}
                 </div>
               );
@@ -946,11 +948,12 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
                   busy={active}
                 />
                 <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                  {/* the first message well below the session bar, as a chat app opens a conversation */}
+                  {/* the first message well below the session bar, as a chat app opens a conversation; the last well above
+                      the composer, room for the way back to it */}
                   <div
                     ref={thread.viewportRef}
                     onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 2)}
-                    className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable] px-4${blank ? ' justify-center py-3.5' : ' pt-8 pb-10'}`}
+                    className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable] px-4${blank ? ' justify-center py-3.5' : ' pt-8 pb-24'}`}
                   >
                     {blank ? (
                       <div ref={thread.contentRef}>
@@ -977,14 +980,16 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
                   <div aria-hidden className={`pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-[var(--dock-pane)] to-transparent transition-opacity duration-150 ${scrolled && !blank ? 'opacity-100' : 'opacity-0'}`} />
                   <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[var(--dock-pane)] to-transparent" />
                   {!blank && !thread.atBottom && (
-                    <button
-                      type="button"
-                      onClick={() => thread.scrollToBottom({ smooth: true })}
-                      className="absolute bottom-1.5 left-1/2 flex h-7 -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 text-[11.5px] font-medium text-[var(--text-dim)] shadow-[0_2px_10px_rgba(0,0,0,0.18)] transition hover:text-[var(--text)]"
-                    >
-                      <ArrowDown size={12} />
-                      {t('project.jumpToLatest')}
-                    </button>
+                    <Tooltip label={t('project.jumpToLatest')}>
+                      <button
+                        type="button"
+                        onClick={() => thread.scrollToBottom({ smooth: true })}
+                        aria-label={t('project.jumpToLatest')}
+                        className="absolute bottom-4 left-1/2 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text-dim)] shadow-[0_2px_10px_rgba(0,0,0,0.18)] transition hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                      >
+                        <ArrowDown size={17} />
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
               </div>
@@ -1032,10 +1037,15 @@ function ChatPane({ project, banners, selection, assetsOpen }: { project: Projec
                       </CardActions>
                     </ComposerCard>
                   ) : null}
-                  {localTurn?.state.error ? <p role="alert" className="text-xs text-[var(--err)]">{localTurn.state.error}</p> : null}
+                  {turnError ? (
+                    <p role="alert" className="text-xs text-[var(--err)]">
+                      {turnError}{' '}
+                      {/* what to send when it keeps failing */}
+                      <span className="text-[var(--text-muted)]"><CopyDiagnostics /></span>
+                    </p>
+                  ) : null}
                   {localTurn?.state.balance ? <BalanceNotice balance={localTurn.state.balance} /> : null}
                   {followUpError && <p className="text-xs text-[var(--err)]">{followUpError}</p>}
-                  {composerFiles.notice && <p className="text-xs text-[var(--warn)]">{composerFiles.notice}</p>}
                   {queued && active ? (
                     <p role="status" className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />

@@ -2,7 +2,7 @@
 // in host.mjs); the file's own elements are the clips: an <iframe> a web page, a <video>, an <img> a still, an
 // <audio> a sound for the mix. Where each plays and sits is what film-doc.mjs reads in the file, the same reading
 // Studio plays and exports by; how each looks is the file's own CSS. Track 0, the first <section>, is on top.
-import { clipFade, clipSpan, clipTag, declarations, fadeGain, filmHead, fittedFade, kindOf, parseFilm, pictureRect, readFilmFile, sourceAt } from './film-doc.mjs';
+import { clipFade, clipSpan, clipTag, declarations, fadeGain, filmHead, fittedFade, kindOf, parseFilm, pictureRect, readFilmFile, sourceAt, srcHref } from './film-doc.mjs';
 import { override, restore } from './overrides.mjs';
 
 /* the file as written (without what the host puts in it), read as every reader reads it */
@@ -24,7 +24,7 @@ Object.assign(document.body.style, { width: stage.w + 'px', height: stage.h + 'p
 const CLIP_TAGS = new Set(['iframe', 'video', 'img', 'audio']);
 const sections = [...document.body.children].filter((el) => el.localName === 'section');
 const elements = sections.map((s) => { s.style.display = 'contents'; return [...s.children].filter((el) => CLIP_TAGS.has(el.localName)); });
-const url = (src) => new URL(src, location.href);
+const url = (src) => new URL(srcHref(src), location.href);
 /* an editor's preview (`?film-missing=skip`) plays on past a clip whose file is not there: the clip keeps its time,
    but is neither loaded, drawn nor heard. Anything else (a check, an export) says the missing file and stops */
 const SKIP_MISSING = new URL(location.href).searchParams.get('film-missing') === 'skip';
@@ -213,31 +213,31 @@ function mediaShown(page) {
 }
 
 /*
- * While a person watches, a video plays by itself instead of being sought frame by frame (a seek decodes from the
- * last key frame: on a long one each frame costs more, and playback stutters). It rolls while frames come in order at
- * about the clock's pace, its own pace nudged toward the film's clock; otherwise (a still moment, a scrub) it is
- * sought (see glance). A video about to come on is sought ahead and starts a moment before its cut, so it is running in
- * step when it shows. When frames stop coming, every video stops; a frame asked of window.film (an export's) is always
- * exact.
+ * While the film plays, a video plays by itself instead of being sought frame by frame (a seek decodes from the last
+ * key frame: on a long one each frame costs more, and playback stutters). It is kept on the film's clock by its pace,
+ * never by seeking while it is near: further off than ROLL_STEER (two frames running) it plays ROLL_NUDGE faster or
+ * slower until it is back within ROLL_SETTLE, and only further off than ROLL_SEEK is it sought. The host says the film
+ * plays (watch's `play`); a still moment or a scrub seeks (see glance). A video about to come on is sought ahead and
+ * starts a moment before its cut, so it is running in step when it shows. When the film stops, every video stops; a
+ * frame asked of window.film (an export's) is always exact.
  */
-const ROLL_STEP = 0.5;   // s: a frame further on than this from the last one is a jump
-const ROLL_DRIFT = 0.25; // s: a playing video further off the film's clock than this is sought again
-const CUE_AHEAD = 1.5;   // s: how long before its clip starts a video is sought, ready
-const PREROLL = 0.2;     // s: how long before its clip starts a video plays, hidden, to be in step at its cut
-const START_LAG = 0.08;  // s: how long play() takes to get a video going
-let rollStop = 0;
-/** the last frame drawn while a person watches: its t and when (to tell playing, in step with the clock, from a scrub) */
-let lastLive = { t: -Infinity, at: 0 };
-/** Keep a playing video at `want`: sought when far off, else its pace nudged until it is in step. */
-function roll(c, want) {
+const ROLL_SEEK = 0.5;    // s: a playing video further off the film's clock than this is sought again
+const ROLL_STEER = 0.04;  // s: further off than this, two frames running, its pace is nudged
+const ROLL_SETTLE = 0.01; // s: back within this, it plays at its own pace again
+const ROLL_NUDGE = 0.03;  // how much faster or slower a nudged video plays
+const CUE_AHEAD = 1.5;    // s: how long before its clip starts a video is sought, ready
+const PREROLL = 0.2;      // s: how long before its clip starts a video plays, hidden, to be in step at its cut
+const START_LAG = 0.08;   // s: how long play() takes to get a video going
+/** Keep a playing video at `want` as the film plays at `rate`: its pace nudged when it drifts, sought when far off. */
+function roll(c, want, rate) {
   const v = c.el;
-  const speed = c.span.speed ?? 1;
   const drift = v.currentTime - want;
-  if (Math.abs(drift) > ROLL_DRIFT || v.ended) { v.currentTime = want; v.playbackRate = speed; }
-  else {
-    const rate = speed * (1 - Math.max(-0.1, Math.min(0.1, drift * 2)));
-    if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
-  }
+  if (Math.abs(drift) > ROLL_SEEK || v.ended) { v.currentTime = want; c.steer = 0; c.off = 0; }
+  else if (Math.abs(drift) > ROLL_STEER) { c.off = (c.off ?? 0) + 1; if (c.off >= 2) c.steer = drift > 0 ? -1 : 1; }
+  else { c.off = 0; if (Math.abs(drift) < ROLL_SETTLE) c.steer = 0; }
+  /* the pace is written only when it changes: each write is work for the media pipeline */
+  const pace = (c.span.speed ?? 1) * rate * (1 + (c.steer ?? 0) * ROLL_NUDGE);
+  if (Math.abs(v.playbackRate - pace) > 1e-4) v.playbackRate = pace;
   if (v.paused) v.play().catch((e) => { if (e?.name === 'NotAllowedError') c.held = true; });
   c.lastWant = want;
 }
@@ -279,25 +279,235 @@ async function glance(c, want) {
   });
 }
 /**
- * A video whose clip starts `lead` seconds from now: sought ahead (to PREROLL before its first frame), started a
- * moment before that point comes (play() takes a moment to get going), then kept in step until its cut.
+ * A video whose clip starts `lead` film seconds from now, the film playing at `rate`: sought ahead (to PREROLL before
+ * its first frame), started a moment before that point comes (play() takes a moment to get going), then kept in step
+ * until its cut.
  */
-function getReady(c, lead) {
+function getReady(c, lead, rate) {
   const v = c.el;
   const speed = c.span.speed ?? 1;
   const first = sourceAt(c.span, 0, c.row);
   const cue = Math.max(0, first - PREROLL * speed);
   const rolling = (first - cue) / speed; // the lead at which the video is at `cue`
-  if (lead < rolling) { roll(c, first - lead * speed); return; }
+  if (lead < rolling) { roll(c, first - lead * speed, rate); return; }
   if (c.cued !== cue || c.lastWant !== cue) {
     if (!v.paused) v.pause();
     v.currentTime = cue;
     c.cued = c.lastWant = cue;
   }
-  if (lead < rolling + START_LAG && v.paused && !v.seeking && !c.held) { v.playbackRate = speed; v.play().catch((e) => { if (e?.name === 'NotAllowedError') c.held = true; }); }
+  if (lead < rolling + START_LAG * rate && v.paused && !v.seeking && !c.held) {
+    v.playbackRate = speed * rate;
+    v.play().catch((e) => { if (e?.name === 'NotAllowedError') c.held = true; });
+  }
 }
 function stopRolling() {
-  for (const c of clips) if (c.kind === 'video' && !c.el.paused) c.el.pause();
+  for (const c of clips) {
+    if (c.kind !== 'video') continue;
+    if (!c.el.paused) c.el.pause();
+    c.steer = 0; c.off = 0;
+  }
+  stopPageFootage();
+}
+
+/*
+ * A page's own footage while the film plays. A page draws a video by setting its currentTime to the frame it wants and
+ * waiting for that frame (SPEC §4): exact, as an export needs, but while the film plays each of those seeks decodes
+ * from the last key frame, and a page showing a few videos plays them at a few frames a second. So while the film
+ * plays, a video whose wanted times move on at a steady pace is played instead, at that pace, and kept on them as the
+ * film's own videos are (see roll); the page is told each seek landed at once (currentTime reads what it asked, and
+ * nothing is seeking). A jump, a held frame or a reverse is sought as asked, and when the film stops each such video
+ * is sought exactly where its page last asked, so a still frame is as exact as ever. The page changes nothing.
+ */
+/** the film playing (`rate`, `now` as in draw's `play`) at the frame being drawn (`t`), or null */
+let footagePlay = null;
+/** which frame a person watching is being drawn (counted), or 0 for an exact one (an export's) */
+let footageFrame = 0;
+let footageFrames = 0;
+/** each page video asked for a time while a person watches: where, at which frame and film second it was asked last,
+    its pace, whether it plays by itself */
+const footage = new WeakMap();
+/** the page videos playing by themselves now */
+const footageRolling = new Set();
+const FOOTAGE_IDLE = 0.6; // film s: a playing page video not asked for this long is stopped (its page went off)
+
+/** A task soon (a seek's events come as tasks, after whatever the page does next in its own turn). */
+const soon = (() => {
+  const channel = new MessageChannel();
+  const queue = [];
+  channel.port1.onmessage = () => queue.shift()?.();
+  return (fn) => { queue.push(fn); channel.port2.postMessage(0); };
+})();
+/** `seeked`s said for a seek not made, a frame: a page asking again for a frame it gave up on is not answered on and on */
+const SAID_MOST = 2;
+
+/** Take over the time a page's videos are asked for (once a page): see above. */
+function steerFootage(win) {
+  const proto = win.HTMLMediaElement?.prototype;
+  if (!proto || Object.hasOwn(proto, '__filmFootage')) return;
+  const own = Object.getOwnPropertyDescriptor(proto, 'currentTime');
+  Object.defineProperty(proto, '__filmFootage', { value: true });
+  Object.defineProperty(proto, 'currentTime', {
+    configurable: true, enumerable: true,
+    get() { const f = footage.get(this); return f?.rolling ? f.want : own.get.call(this); },
+    set(value) {
+      const how = footageAsked(this, Number(value), own, win);
+      if (how === 'seek') { own.set.call(this, value); return; }
+      if (how === 'drop') return;
+      /* the page waits for its seek as for any (SPEC §4): it lands at once, said as a seek is */
+      const f = footage.get(this);
+      if (f.said.seq !== f.seq) f.said = { seq: f.seq, n: 0 };
+      if (++f.said.n > SAID_MOST) return;
+      soon(() => this.dispatchEvent(new win.Event('seeked')));
+    },
+  });
+}
+
+/**
+ * A page asks for its video `v` at `want` (media seconds): 'seek' to seek as asked; 'play' when it plays on there by
+ * itself (the page is told its seek landed); 'drop' for an ask of a frame given up on (see below), neither sought nor
+ * answered. `own`: the page's own currentTime, before this one took it over.
+ */
+function footageAsked(v, want, own, win) {
+  const play = footagePlay;
+  const frame = footageFrame;
+  const f = footage.get(v);
+  if (!frame || !(v instanceof win.HTMLVideoElement) || !Number.isFinite(want)) { footageStop(v, false); return 'seek'; }
+  if (!f) { footage.set(v, { own, want, t: play?.t ?? null, seq: frame, pace: null, rolling: false, steer: 0, off: 0, said: { seq: null, n: 0 } }); return 'seek'; }
+  if (f.seq === frame) {
+    /* asked again within the same frame for the same time: the page making sure */
+    if (Math.abs(want - f.want) < 1e-6) return f.rolling ? 'play' : 'seek';
+    /* for another time, once this frame asked: an earlier frame's wait, left when the host gave up on that frame
+       (a slow seek while playing or scrubbing), asking for that frame's time when a seek of this one lands. Sought,
+       it would undo this frame's, which would ask again, and so on: the first ask of a frame stands */
+    return 'drop';
+  }
+  f.seq = frame;
+  /* a later frame, still: sought as asked */
+  if (!play) { f.want = want; f.t = null; f.pace = null; return 'seek'; }
+  /* playing: how far on the film went since the last ask, and the video with it */
+  const dt = f.t == null ? 0 : play.t - f.t;
+  const pace = dt > 0 ? (want - f.want) / dt : 0;
+  /* moving on at a pace a video can play at, the same as the frame before: it plays (or plays on) at that pace. A gap
+     between asks is a jump, unless it went on playing meanwhile (under a render, see playRenders) */
+  const steady = pace > 0.0625 && pace < 16 && (dt < 0.5 || f.rolling) && f.pace != null && Math.abs(pace - f.pace) <= 0.02 * f.pace;
+  f.t = play.t;
+  f.pace = pace;
+  if (!steady || v.readyState < 2) { footageStop(v, false); f.want = want; return 'seek'; }
+  f.want = want;
+  /* where it should be this moment: the frame asked is the one on its way to the screen, a moment from now */
+  const expected = Math.max(0, want - pace * (play.t - play.now));
+  const drift = own.get.call(v) - expected;
+  if (!f.rolling) {
+    own.set.call(v, expected);
+    f.rolling = true;
+    f.steer = 0; f.off = 0;
+    footageRolling.add(v);
+  } else if (Math.abs(drift) > ROLL_SEEK || v.ended) {
+    own.set.call(v, expected);
+    f.steer = 0; f.off = 0;
+  } else if (Math.abs(drift) > ROLL_STEER) { f.off += 1; if (f.off >= 2) f.steer = drift > 0 ? -1 : 1; }
+  else { f.off = 0; if (Math.abs(drift) < ROLL_SETTLE) f.steer = 0; }
+  const rate = pace * play.rate * (1 + f.steer * ROLL_NUDGE);
+  if (Math.abs(v.playbackRate - rate) > 1e-4) v.playbackRate = rate;
+  /* a page has no sound (SPEC: every sound is a clip): never heard */
+  v.muted = true;
+  if (v.paused) v.play().catch(() => footageStop(v));
+  return 'play';
+}
+
+/**
+ * A page video that played by itself stops, sought exactly to where its page last asked (not with `seek` false: the
+ * page is seeking it itself now).
+ */
+function footageStop(v, seek = true) {
+  const f = footage.get(v);
+  if (!f?.rolling) return;
+  f.rolling = false;
+  f.pace = null;
+  footageRolling.delete(v);
+  if (!v.paused) v.pause();
+  if (seek) f.own.set.call(v, f.want);
+}
+
+/** The film stopped: every page video playing by itself stops where it was asked last. */
+function stopPageFootage() {
+  footagePlay = null;
+  for (const v of [...footageRolling]) footageStop(v);
+}
+
+/** While playing: a page video no frame asked for lately (its page went off, or stopped showing it) stops. */
+function idleFootage(t) {
+  for (const v of [...footageRolling]) if (t - footage.get(v).t > FOOTAGE_IDLE) footageStop(v);
+}
+
+/*
+ * Renders: stretches of the film an editor had rendered into a video because they played late (Studio's preview
+ * renders), given as `{ a, b, src }`. While the film plays through one, its video plays above everything, kept on the
+ * film's clock as a video clip is; the clips under it are drawn only a few times a second, out of sight, and every
+ * frame again just before it ends, so they are on screen as it ends. Stopped, the film is drawn as ever and the render
+ * goes once that is on screen. A film exported or looked at has none.
+ */
+const renders = [];
+const RENDER_HANDOVER = 0.5; // s: how long before a render ends the clips under it are drawn every frame again
+const RENDER_WARM = 0.25;    // s: before that, they are drawn this often, out of sight (see draw)
+/** the film second the clips under a render were last drawn at */
+let warmAt = -Infinity;
+/** the render playing now, or null */
+let renderOn = null;
+
+/** The renders the film has now (each a video clip of its own, kept while it is the same stretch of the same file). */
+function setRenders(list) {
+  const kept = new Map(renders.map((r) => [`${r.row.src}\0${r.at}\0${r.end}`, r]));
+  const next = [];
+  for (const { a, b, src } of list) {
+    const key = `${src}\0${a}\0${b}`;
+    const had = kept.get(key);
+    if (had) { kept.delete(key); next.push(had); continue; }
+    const el = document.createElement('video');
+    el.muted = true; el.playsInline = true; el.preload = 'none';
+    Object.assign(el.style, { position: 'absolute', left: '0', top: '0', margin: '0', objectFit: 'fill', visibility: 'hidden', pointerEvents: 'none' });
+    document.body.append(el);
+    next.push({ kind: 'video', id: `render ${a}-${b}`, el, at: a, end: b, span: { from: 0, to: b - a, speed: 1, length: b - a }, row: { src }, awake: null });
+  }
+  for (const r of kept.values()) { r.el.pause(); r.el.removeAttribute('src'); r.el.load(); r.el.remove(); if (renderOn === r) renderOn = null; }
+  renders.splice(0, renders.length, ...next);
+}
+
+/**
+ * While playing (`play`), at frame t: the render the film is in plays and shows, one coming up gets ready. True when
+ * the clips are not to be drawn this frame (a render covers them, not near its end).
+ */
+function playRenders(t, play) {
+  const on = play ? renders.find((r) => play.now >= r.at && play.now < r.end) ?? null : null;
+  for (const r of renders) {
+    Object.assign(r.el.style, { width: stage.w + 'px', height: stage.h + 'px', zIndex: String(doc.tracks.length + 1) });
+    if (r === on) continue;
+    if (play && r.at > play.now && r.at - play.now < WAKE_AHEAD * play.rate) {
+      if (!r.awake) { r.el.preload = 'auto'; r.el.src = r.row.src; r.awake = true; }
+      if (r.at - play.now < CUE_AHEAD * play.rate) getReady(r, r.at - play.now, play.rate);
+      continue;
+    }
+    if (!r.el.paused) r.el.pause();
+    /* far from where the film plays: its file let go, as a video clip's (see near) */
+    if (r.awake && play && (r.at - play.now > KEEP || play.now - r.end > KEEP)) { r.el.removeAttribute('src'); r.el.load(); r.awake = null; }
+  }
+  if (!on) { renderOn = null; return false; }
+  if (!on.awake) { on.el.preload = 'auto'; on.el.src = on.row.src; on.awake = true; }
+  roll(on, play.now - on.at, play.rate);
+  if (on.el.readyState < 2) { renderOn = null; return false; }
+  /* the clips under it are not drawn, but their videos play on, out of sight: paused, a page's many would be let go
+     by the browser (it suspends paused players past a few), and at the render's end each is still in step */
+  renderOn = on;
+  on.el.style.visibility = 'visible';
+  return t < on.end - RENDER_HANDOVER;
+}
+/** The renders but `keep` go from the screen (the film drawn under them is all there). */
+function hideRenders(keep = null) {
+  for (const r of renders) {
+    if (r === keep) continue;
+    if (r.el.style.visibility !== 'hidden') r.el.style.visibility = 'hidden';
+    if (!r.el.paused) r.el.pause();
+  }
 }
 
 /*
@@ -384,6 +594,7 @@ function wakePage(c) {
     const win = el.contentWindow;
     await ready(win.film);
     if (c.waking !== mine) return;
+    steerFootage(win);
     c.win = win;
     c.child = win.film;
     c.touched = new Map();
@@ -551,6 +762,9 @@ async function load(row, track, ti, el) {
     if (!facts && !(await mustBeThere(row.src))) c.missing = true;
     c.native = facts?.duration ?? 0;
   } else if (kind === 'still') {
+    /* its file as the film names it: a name written with a bare `?` or `%` asks the browser for another file */
+    const href = url(row.src).href;
+    if (el.src.replace(/#.*$/, '') !== href) el.src = href;
     await el.decode().catch(() => {});
     if (!el.naturalWidth && !(await mustBeThere(row.src))) c.missing = true;
     c.nw = el.naturalWidth || stage.w; c.nh = el.naturalHeight || stage.h;
@@ -606,19 +820,15 @@ loading.catch(() => {});
 let watched = 0;
 
 /**
- * Draw the film at t. `live`: a person is watching (an editor, or the film opened as a page), so videos play by
- * themselves while frames come in order, and a scrub's frame does not wait for its video to be on screen; otherwise
- * the frame is exact (an export's, `look`'s).
+ * Draw the film at t. `live`: a person is watching (an editor, or the film opened as a page), so a scrub's frame does
+ * not wait for its video to be on screen; otherwise the frame is exact (an export's, `look`'s). `play`: the film is
+ * playing, `rate` film seconds a second, and is at film second `now` this moment (t is the frame on its way to the
+ * screen, a moment later): videos play by themselves, kept on that clock; without it, every video stops.
  */
-async function draw(t, live) {
+async function draw(t, live, play = null) {
   shownT = t;
-  clearTimeout(rollStop);
-  if (live) rollStop = setTimeout(stopRolling, 150); else stopRolling();
-  /* playing: this frame follows the last one at about the clock's pace (a scrub goes anywhere at any pace) */
-  const now = performance.now();
-  const pace = (t - lastLive.t) / Math.max(1e-3, (now - lastLive.at) / 1000);
-  const playing = live && t >= lastLive.t && t - lastLive.t < ROLL_STEP && pace > 0.5 && pace < 2;
-  lastLive = live ? { t, at: now } : { t: -Infinity, at: 0 };
+  const playing = live && play != null;
+  if (!playing) stopRolling();
   clearTimeout(settleNear);
   if (live && !playing) { near(t, { only: true }); settleNear = setTimeout(() => near(t), 250); } else near(t, { exact: !live });
   /* watched, a page coming on shows once its frame is drawn, and the pictures going off stay until then: shown first,
@@ -626,9 +836,20 @@ async function draw(t, live) {
      its frame took, a flash at the cut. An exact frame is taken when all of it is drawn, so it shows each at once. */
   const turn = live ? ++watched : 0;
   const coming = [], going = [];
+  /* a render of this stretch plays instead of the clips (see setRenders). Under it they are drawn a few times a
+     second, out of sight: what a page loads as it goes (its footage, its pictures) comes as it would, not all at once
+     as the render ends, and its footage goes on playing in step */
+  if (live && playRenders(t, playing ? play : null) && Math.abs(t - warmAt) < RENDER_WARM) return;
+  warmAt = t;
+  /* the pages' footage plays by itself while the film does (see steerFootage) */
+  footageFrame = live ? ++footageFrames : 0;
+  footagePlay = playing ? { rate: play.rate, now: play.now, t } : null;
   try {
-    await Promise.all(clips.map((c) => drawClip(c, t, live, playing, turn, coming, going)));
+    await Promise.all(clips.map((c) => drawClip(c, t, live, playing ? play : null, turn, coming, going)));
+    if (playing) idleFootage(t);
   } finally {
+    /* the film drawn: a render not playing now goes */
+    hideRenders(playing ? renderOn : null);
     for (const c of coming) if (c.coming === turn) c.coming = 0;
     if (live && turn === watched) {
       for (const c of going) if (!c.shown) c.el.style.visibility = 'hidden';
@@ -638,7 +859,7 @@ async function draw(t, live) {
 }
 
 /** One clip's part of a frame (see draw): a page coming on while watched is put in `coming`, a picture going off in `going`. */
-async function drawClip(c, t, live, playing, turn, coming, going) {
+async function drawClip(c, t, live, play, turn, coming, going) {
   if (c.kind === 'sound') return;
   const on = !c.hidden && !c.missing && t >= c.at && t < c.end;
   c.shown = on;
@@ -649,14 +870,19 @@ async function drawClip(c, t, live, playing, turn, coming, going) {
   if (on) fadeAt(c, t);
   if (!on) {
     if (c.kind !== 'video') return;
-    if (playing && c.awake && c.at > t && c.at - t < CUE_AHEAD) getReady(c, c.at - t);
+    if (play && c.awake && c.at > t && c.at - play.now < CUE_AHEAD * play.rate) getReady(c, c.at - play.now, play.rate);
     else { if (!c.el.paused) c.el.pause(); c.lastWant = c.cued = undefined; }
     return;
   }
   if (c.kind === 'still') return;
   if (c.kind === 'video') {
+    if (play) {
+      /* where it should be this moment (not at the frame on its way): its own clock runs on to that frame */
+      const playing = sourceAt(c.span, Math.min(Math.max(0, play.now - c.at), c.span.length), c.row);
+      if (c.held) step(c, playing); else roll(c, playing, play.rate);
+      return;
+    }
     const want = sourceAt(c.span, t - c.at, c.row);
-    if (playing) { if (c.held) step(c, want); else roll(c, want); return; }
     c.held = false;
     if (live) { await glance(c, want); return; }
     if (!c.el.paused) c.el.pause();
@@ -901,8 +1127,8 @@ function describe(c, el) {
 }
 
 window.__filmEditor = {
-  /** Draw the film at t for a person watching it (see draw). */
-  watch: (t) => draw(t, true),
+  /** Draw the film at t for a person watching it (see draw); `play` while it plays: `{ rate, now }`. */
+  watch: (t, play = null) => draw(t, true, play),
   /**
    * For Studio's stage (studio/server/stage.js): the clips as loaded, a clip placed by a box not kept yet (null: by
    * its own again), `updated`, which the stage sets to hear of each update made in place, and `woke`, to hear of a page
@@ -933,6 +1159,10 @@ window.__filmEditor = {
     changing = changing.then(() => change(value, look)).catch(() => false);
     return changing;
   },
+  /** The stretches rendered for the preview, `{ a, b, src }` (see setRenders); [] none. */
+  renders(list) { setRenders(Array.isArray(list) ? list.filter((r) => r && r.b > r.a && typeof r.src === 'string') : []); },
+  /** Whether a render plays in the film's place now. */
+  rendering: () => renderOn != null,
   /** Show `overrides` on a page clip instead of its own until called with null (a drag, a typed word). */
   preview(id, overrides) {
     const c = clips.find((x) => x.id === id && x.kind === 'page');
@@ -960,6 +1190,10 @@ window.__filmEditor = {
 if (!window.filmHost) {
   await loading;
   const t0 = performance.now();
-  const loop = async () => { await draw(((performance.now() - t0) / 1000) % film.duration, true); requestAnimationFrame(loop); };
+  const loop = async () => {
+    const t = ((performance.now() - t0) / 1000) % film.duration;
+    await draw(t, true, { rate: 1, now: t });
+    requestAnimationFrame(loop);
+  };
   loop();
 }

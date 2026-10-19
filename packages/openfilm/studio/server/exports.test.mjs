@@ -3,15 +3,17 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createExports, exportCapabilities, exportsRoot, ExportError, frameBox, dimsForShortEdge, hardwareEncoder, hardwareOptions, projectFiles, projectSizes } from './exports.mjs';
+import { createExports, exportCapabilities, exportsRoot, ExportError, frameBox, dimsForShortEdge, projectFiles, projectSizes } from './exports.mjs';
+import { encoders, hardwareEncoder } from '../../src/encoders.mjs';
 import { allocateLanes, containMotion, fadeKeyframes, frameSpan, nleRate, planNleTimeline, xmemlDocument } from './nle.mjs';
 import { fcpxmlDocument } from './fcpxml.mjs';
 import { pptxParts } from './slides.mjs';
 import { filmSubtitleSrt, parseFilmSubtitleStyle } from './film-subtitle.mjs';
 import { zipFiles } from './zip.mjs';
 import { launch } from '../../src/host.mjs';
+import { layoutTracks } from '../ui/src/lib/timeline-layout.ts';
 import { filmHtml } from '../../src/film-doc.mjs';
 
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -234,6 +236,8 @@ test('each codec this machine encodes, at the size asked, transparent where the 
     assert.equal(probe(done.out, 'stream=codec_name,width,height'), `${name},160,90`, codec);
     if (codec === 'prores422hq') assert.equal(done.alpha, null, 'no alpha to measure');
     if (codec === 'prores4444' || codec === 'vp9') assert.deepEqual(done.alpha, { any: false }, `${codec}: the title paints over all of it`);
+    /* ProRes on the Mac's ProRes engine when it has one, ffmpeg's own encoder otherwise */
+    if (name === 'prores') assert.equal(done.encoder, (await hardwareEncoder('prores', await encoders())) ?? 'prores_ks', codec);
   }
   const hevc = can.hevc ? (await exported({ kind: 'video', codec: 'hevc', fps: 5, range: [0, 0.2] })).out : null;
   if (hevc) assert.equal(probe(hevc, 'stream=codec_tag_string'), 'hvc1', 'HEVC that Apple players open');
@@ -445,19 +449,127 @@ test('Final Cut Pro keeps source audio rows when an effect overlaps adjacent nar
   ]);
   assert.deepEqual(timeline.audio.map((t) => t.sourceTrack), [1, 2, 3]);
   const xml = fcpxmlDocument(timeline);
-  assert.match(xml, /name="story-01-1" lane="-1"[^>]*audioRole="OpenFilm A1"/);
-  assert.match(xml, /name="story-01-2" lane="-1"[^>]*audioRole="OpenFilm A1"/);
-  assert.match(xml, /name="game-sfx-1" lane="-2"[^>]*audioRole="OpenFilm A2"/);
-  assert.match(xml, /name="adventure-music" lane="-3"[^>]*audioRole="OpenFilm A3"/);
+  assert.match(xml, /name="story-01-1" lane="-1"[^>]*role="OpenFilm A1"/);
+  assert.match(xml, /name="story-01-2" lane="-1"[^>]*role="OpenFilm A1"/);
+  assert.match(xml, /name="game-sfx-1" lane="-2"[^>]*role="OpenFilm A2"/);
+  assert.match(xml, /name="adventure-music" lane="-3"[^>]*role="OpenFilm A3"/);
   assert.notDeepEqual(planNleTimeline(film, opts).audio.map((t) => t.clips.map((c) => c.name)), timeline.audio.map((t) => t.clips.map((c) => c.name)), 'other editors keep their existing role grouping');
   const overlapping = planNleTimeline({ ...film, sounds: [...film.sounds, sound('overlapping-voice', 1, 1, 2)] }, { ...opts, audioTracks: 'source' });
   assert.equal(overlapping.audio.length, 4, 'only an overlap within a source row needs another lane');
   assert.deepEqual(overlapping.audio.map((t) => t.sourceTrack), [1, 1, 2, 3]);
-  assert.match(fcpxmlDocument(overlapping), /name="overlapping-voice"[^>]*audioRole="OpenFilm A1"/);
+  assert.match(fcpxmlDocument(overlapping), /name="overlapping-voice"[^>]*role="OpenFilm A1"/);
   const reversed = planNleTimeline({ ...film, sounds: [...film.sounds].reverse() }, { ...opts, audioTracks: 'source' });
   assert.deepEqual(reversed.audio.map((t) => t.clips.map((c) => c.name)), timeline.audio.map((t) => t.clips.map((c) => c.name)));
   const { track, ...untracked } = film.sounds[0];
   assert.throws(() => planNleTimeline({ ...film, sounds: [untracked] }, { ...opts, audioTracks: 'source' }), /story-01-1 has no source track/);
+});
+
+test('Final Cut Pro footage audio follows its own picture, including reused sources and processed audio', async () => {
+  const facts = { w: 320, h: 180, duration: 20, fps: 25, hasVideo: true, hasAudio: true, channels: 2, sampleRate: 48000 };
+  const picture = (id, track, at, end, from) => ({ id, track, at, end, from, kind: 'video',
+    src: 'source.mov', path: join(scratch, 'source.mov'), speed: 1, hidden: false, facts });
+  const pictures = [picture('main', 1, 0, 3, 0), picture('next', 1, 3, 8, 3),
+    picture('overlay', 0, 1, 4, 2), picture('reused overlay', 0, 5, 7, 10)];
+  const sounds = pictures.map((p) => ({ ...p, picture: p.id, role: 'footage', to: p.from + p.end - p.at,
+    enabled: p.id !== 'main', volume: 0.5, ...(p.id === 'reused overlay' ? { fade: [0.2, 0.3] } : {}) }));
+  sounds.push({ ...sounds[2], id: 'independent', picture: undefined, track: 2, enabled: true });
+  const plans = [25, 29.97].map((fps) => planNleTimeline({
+    stage: { w: 320, h: 180 }, duration: 8, pictures, sounds,
+  }, { title: 'Linked footage', fps, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' }));
+  const parsed = await parseXml(plans.map((plan) => fcpxmlDocument(plan)), (doc) => {
+    const seconds = (value) => {
+      const [n, d = '1'] = (value ?? '0s').replace(/s$/, '').split('/');
+      return Number(n) / Number(d);
+    };
+    const at = (el) => el.parentElement.tagName === 'spine' ? seconds(el.getAttribute('offset'))
+      : at(el.parentElement) + seconds(el.getAttribute('offset')) - seconds(el.parentElement.getAttribute('start'));
+    const clips = [...doc.querySelectorAll('audio, asset-clip[srcEnable="audio"]')].map((el) => ({
+      name: el.getAttribute('name'), parent: el.parentElement.getAttribute('name'), parentTag: el.parentElement.tagName,
+      owner: el.parentElement.parentElement.getAttribute('name'), at: at(el),
+      from: seconds(el.getAttribute('start')), enabled: el.getAttribute('enabled'),
+      volume: Boolean(el.querySelector('adjust-volume')), keyframes: el.querySelectorAll('keyframe').length,
+    }));
+    const overlay = doc.querySelector('clip[name="overlay"]');
+    overlay.setAttribute('offset', `${seconds(overlay.getAttribute('offset')) + 1}s`);
+    return { clips, moved: overlay.querySelector('audio') ? at(overlay.querySelector('audio')) : null, ambiguous: doc.querySelectorAll('asset-clip').length };
+  });
+  for (const [i, { error, found }] of parsed.entries()) {
+    assert.equal(error, null);
+    const plan = plans[i];
+    assert.equal(found.clips.length, sounds.length, 'each sound appears exactly once as audio');
+    const fps = plan.rate.fps;
+    for (const original of sounds) {
+      const clip = plan.audio.flatMap((track) => track.clips).find((clip) => clip.name === original.id);
+      const actual = found.clips.find((clip) => clip.name === original.id);
+      assert.ok(actual, original.id);
+      assert.equal(actual.parent, original.picture ?? 'main', original.id);
+      assert.equal(actual.parentTag, original.picture ? 'video' : 'clip', original.id);
+      if (original.picture) assert.equal(actual.owner, original.picture, original.id);
+      assert.equal(Math.round(actual.at * fps), clip.start, original.id);
+      assert.equal(Math.round(actual.from * fps), clip.in, original.id);
+      assert.equal(actual.enabled, original.enabled ? '1' : '0', original.id);
+      assert.ok(actual.volume, original.id);
+    }
+    assert.equal(found.ambiguous, 0, 'audio nodes cannot enable video from an A/V asset');
+    assert.ok(found.clips.find((clip) => clip.name === 'reused overlay').keyframes > 0);
+    assert.ok(Math.abs(found.moved - 2) < 1 / fps, 'moving an overlay moves its sound by the same amount');
+  }
+});
+
+test('Final Cut Pro keeps original audio paired when its picture is rendered', async () => {
+  const facts = { w: 320, h: 180, duration: 8, hasVideo: true, hasAudio: true, channels: 2, sampleRate: 48000 };
+  const documents = [1, 2].map((speed) => {
+    const picture = { id: 'rendered', kind: 'video', src: 'source.mov', path: join(scratch, 'source.mov'),
+      at: 1, end: 3, from: 2, speed, track: 0, hidden: false, styled: true, facts };
+    const plan = planNleTimeline({ stage: { w: 320, h: 180 }, duration: 4, pictures: [picture],
+      sounds: [{ ...picture, picture: picture.id, to: 2 + 2 * speed, volume: 0.5, enabled: true, role: 'footage' }],
+    }, { title: 'Rendered footage', fps: 25, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' });
+    return fcpxmlDocument(plan);
+  });
+  for (const { error, found } of await parseXml(documents, (doc) => {
+    const picture = doc.querySelector('clip[name="rendered"]');
+    const audio = picture.querySelector('video > audio');
+    return { linked: Boolean(audio), offset: audio?.getAttribute('offset'), count: doc.querySelectorAll('audio').length };
+  })) {
+    assert.equal(error, null);
+    assert.ok(found.linked, 'rendering the picture must not detach its original sound');
+    assert.equal(found.offset, '0/25s');
+    assert.equal(found.count, 1);
+  }
+});
+
+test('Final Cut Pro exports Studio row names for empty tracks, overlaps and footage sound', ffmpeg, async () => {
+  const folder = join(scratch, 'Source rows');
+  mkdirSync(folder);
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=size=160x90:rate=25:duration=1',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-shortest', join(folder, 'picture.mp4')]);
+  for (const name of ['voice.wav', 'music.wav']) writeFileSync(join(folder, name), readFileSync(join(root, 'assets/tone.wav')));
+  const definitions = [
+    { clips: [{ id: 'picture', src: 'picture.mp4', at: 0, time: [0, 1] }] },
+    { clips: [] },
+    { clips: [{ id: 'voice', src: 'voice.wav', at: 0, time: [0, 1] },
+      { id: 'overlap', src: 'voice.wav', at: 0.5, time: [0, 0.5] }] },
+    { clips: [{ id: 'music', src: 'music.wav', at: 0, time: [0, 1] }] },
+  ];
+  const doc = { stage: { w: 160, h: 90 }, tracks: definitions };
+  writeFileSync(join(folder, 'film.html'), filmHtml(doc));
+  const evaluated = definitions.flatMap((track, index) => track.clips.map((clip) => ({
+    clipId: clip.id, key: clip.id, src: clip.src, loc: `film.html#${index}.${track.clips.indexOf(clip)}`,
+    startMs: clip.at * 1000, durMs: (clip.time[1] - clip.time[0]) * 1000,
+    track: { index, kind: index === 0 ? 'video' : 'audio', name: index === 0 ? 'video' : 'audio' },
+  })));
+  const studio = layoutTracks({ doc, scenes: [], captions: [],
+    videos: evaluated.filter((clip) => clip.track.kind === 'video'),
+    sounds: evaluated.filter((clip) => clip.track.kind === 'audio').map((clip) => ({ ...clip, kind: 'voice' })),
+  });
+  assert.deepEqual(studio.map((row) => row.badge), ['V2', 'V1', 'A1', 'A2', 'A3']);
+  const expected = Object.fromEntries(studio.flatMap((row) => row.blocks.map((clip) => [clip.clipId, `OpenFilm ${row.badge}`])));
+  const done = await exported({ kind: 'nle', format: 'fcpxml', fps: 25, audio: 'clips', subtitles: false }, 'Source rows', folder);
+  const [{ error, found }] = await parseXml([readFileSync(done.out, 'utf8')], (doc) =>
+    Object.fromEntries([...doc.querySelectorAll('audio')].map((audio) => [audio.getAttribute('name'), audio.getAttribute('role')])));
+  assert.equal(error, null);
+  assert.deepEqual(found, expected);
 });
 
 test('Final Cut Pro reports unreadable subtitles before writing an incomplete export', async () => {
@@ -505,11 +617,11 @@ test('Final Cut Pro connections retain their parent and sequence positions acros
     const clips = [];
     const visit = (el, parentAt, parentIn) => {
       const at = parentAt + attr(el, 'offset') - parentIn;
-      if (el.tagName === 'asset-clip' || el.tagName === 'title') clips.push({
+      if (['clip', 'audio', 'title'].includes(el.tagName)) clips.push({
         name: el.getAttribute('name'), parent: el.parentElement?.getAttribute('name'),
         at, end: at + attr(el, 'duration'), from: attr(el, 'start'),
       });
-      for (const child of el.children) if (['asset-clip', 'gap', 'title'].includes(child.tagName)) visit(child, at, attr(el, 'start'));
+      for (const child of el.children) if (['clip', 'video', 'audio', 'gap', 'title'].includes(child.tagName)) visit(child, at, attr(el, 'start'));
     };
     const spine = doc.querySelector('sequence > spine');
     for (const child of spine.children) visit(child, 0, 0);
@@ -544,8 +656,8 @@ test('Final Cut Pro export packages FCPXML, rendered pages, audio and optional s
     assert.equal(done.outputs.some((f) => f.endsWith('.srt')), audio === 'clips');
     const [{ error, found }] = await parseXml([readFileSync(done.out, 'utf8')], (doc) => ({
       version: doc.documentElement.getAttribute('version'),
-      primary: [...doc.querySelectorAll('sequence > spine > asset-clip')].map((c) => c.getAttribute('name')),
-      clips: [...doc.querySelectorAll('asset-clip')].map((c) => ({ name: c.getAttribute('name'), role: c.getAttribute('audioRole'), lane: Number(c.getAttribute('lane')), enabled: c.getAttribute('enabled'), kind: c.getAttribute('srcEnable') })),
+      primary: [...doc.querySelectorAll('sequence > spine > clip')].map((c) => c.getAttribute('name')),
+      clips: [...doc.querySelectorAll('clip, audio')].map((c) => ({ name: c.getAttribute('name'), role: c.getAttribute('role'), lane: Number(c.getAttribute('lane')), enabled: c.getAttribute('enabled'), kind: c.tagName === 'clip' ? 'video' : 'audio' })),
       media: [...doc.querySelectorAll('media-rep')].map((m) => m.getAttribute('src')),
       formats: [...doc.querySelectorAll('format')].map((f) => f.getAttribute('frameDuration')),
       subtitles: [...doc.querySelectorAll('title > text')].map((c) => c.textContent),
@@ -559,8 +671,13 @@ test('Final Cut Pro export packages FCPXML, rendered pages, audio and optional s
     assert.equal(found.clips.filter((c) => c.kind === 'video').length, 2);
     assert.ok(found.clips.some((c) => c.kind === 'audio' && c.lane < 0));
     if (audio === 'clips') {
-      for (const name of ['tone', 'click']) assert.equal(found.clips.find((c) => c.name === name)?.role, 'OpenFilm A1');
-      assert.equal(found.clips.find((c) => c.name === 'bed')?.role, 'OpenFilm A2');
+      assert.equal(found.clips.find((c) => c.name === 'tone')?.role, 'OpenFilm A1');
+      assert.equal(found.clips.find((c) => c.name === 'click')?.role, 'OpenFilm A2');
+      assert.equal(found.clips.find((c) => c.name === 'bed')?.role, 'OpenFilm A3');
+    } else {
+      assert.equal(found.clips.find((c) => c.name === 'Voice stem')?.role, 'dialogue.Voice');
+      assert.equal(found.clips.find((c) => c.name === 'SFX stem')?.role, 'effects');
+      assert.equal(found.clips.find((c) => c.name === 'Music stem')?.role, 'music');
     }
     assert.ok(found.formats.every((f) => f === '1/25s'));
     for (const url of found.media) assert.ok(existsSync(fileURLToPath(url)), url);
@@ -852,22 +969,32 @@ test('an editing-software export of a film whose clip leads out of the project (
   assert.deepEqual(made.flatMap((n) => readdirSync(join(exportsRoot(), n), { recursive: true })).filter((f) => /private/.test(String(f))), []);
 });
 
-test('each graphics chip\'s encoder gets a bitrate it keeps to, with HEVC tagged for Apple players', () => {
-  for (const encoder of ['h264_videotoolbox', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_mf', 'hevc_videotoolbox', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_mf']) {
-    const options = hardwareOptions(encoder, 8e6);
-    assert.deepEqual(options.slice(0, 2), ['-c:v', encoder]);
-    assert.equal(options[options.indexOf('-b:v') + 1], '8000k', encoder);
-    assert.equal(options.includes('hvc1'), encoder.startsWith('hevc_'), encoder);
+
+test('a poster, and a video with its subtitles burned in, show footage no browser decodes (ProRes) through its copy', ffmpeg, async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'of-exports-prores-'));
+  try {
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x2060c0:size=320x180:rate=30', '-t', '1', '-c:v', 'prores_ks', '-profile:v', '3', join(folder, 'a.mov')]);
+    writeFileSync(join(folder, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'v', src: 'a.mov', at: 0, time: [0, 1] }] }] }));
+    const poster = await exported({ kind: 'poster', format: 'png', at: 0.5 }, 'ProRes', folder);
+    assert.ok(near(firstFrame(poster.out).at(160, 90), [0x20, 0x60, 0xc0], 20), `the poster: ${firstFrame(poster.out).at(160, 90)}`);
+    /* the film drawn inside a frame with its subtitles: the project's footage, copied for it too */
+    const burned = await exported({ kind: 'video', fps: 10, range: [0, 0.5], burnSubtitles: true }, 'ProRes burned', folder);
+    assert.ok(near(firstFrame(burned.out).at(160, 30), [0x20, 0x60, 0xc0], 24), `the burned video: ${firstFrame(burned.out).at(160, 30)}`);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
   }
-  assert.ok(hardwareOptions('h264_mf', 8e6).join(' ').includes('-hw_encoding 1'), 'never Windows\' software encoder');
 });
 
-test('a hardware encoder is used only when this ffmpeg has it and it works', ffmpeg, async () => {
-  assert.equal(await hardwareEncoder('h264', new Set(['libx264']), 'win32'), null, 'none built in');
-  assert.equal(await hardwareEncoder('h264', new Set(['h264_nvenc']), 'darwin'), null, 'not one of this platform\'s');
-  const have = new Set(execFileSync('ffmpeg', ['-hide_banner', '-encoders']).toString().match(/^ V\S{5} (\S+)/gm)?.map((l) => l.trim().split(/\s+/)[1]) ?? []);
-  if (process.platform === 'darwin' && have.has('h264_videotoolbox')) {
-    assert.equal(await hardwareEncoder('h264', have), 'h264_videotoolbox');
-    assert.equal(await hardwareEncoder('hevc', have), have.has('hevc_videotoolbox') ? 'hevc_videotoolbox' : null);
-  }
+test('platforms that take the same picture are drawn once, the others get its file under their own name', ffmpeg, async () => {
+  const seen = [];
+  const exports = createExports({ captions: subtitles, onChange: (job) => seen.push(job) });
+  const same = { kind: 'video', frame: '9:16', shortEdge: 180, fps: 10, range: [0, 0.4] };
+  const queued = exports.startAll(project('Feeds'), { jobs: [{ ...same, preset: '抖音' }, { ...same, preset: '快手' }, { ...same, preset: '视频号' }, { ...same, fps: 5, preset: 'Other' }] });
+  const done = [];
+  for (const job of queued) done.push(await ended(exports, job));
+  assert.deepEqual(done.map((j) => j.status), ['done', 'done', 'done', 'done'], done.map((j) => j.error).join(' '));
+  assert.deepEqual(done.map((j) => basename(j.out)), ['Feeds · 抖音 0-0.4s.mp4', 'Feeds · 快手 0-0.4s.mp4', 'Feeds · 视频号 0-0.4s.mp4', 'Feeds · Other 0-0.4s.mp4']);
+  const drawn = new Set(seen.filter((j) => j.phase === 'rendering').map((j) => j.id));
+  assert.deepEqual(done.map((j) => drawn.has(j.id)), [true, false, false, true], 'only the first of the same, and the one at another rate');
+  assert.ok(readFileSync(done[1].out).equals(readFileSync(done[0].out)) && readFileSync(done[2].out).equals(readFileSync(done[0].out)), 'the same file');
 });

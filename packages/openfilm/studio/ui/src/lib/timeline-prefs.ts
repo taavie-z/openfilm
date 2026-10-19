@@ -1,32 +1,31 @@
 /**
- * The timeline's switches, kept on this machine across projects:
- *   · `snap` (on by default, as in CapCut, Premiere and OpenCut): drags line up with edges and the playhead; off means
- *     "it lands exactly where I let go";
- *   · `magnet` (on by default, as CapCut's main-track magnet): the main track (the lowest picture track) stays closed
- *     up — a clip put down on it inserts and pushes what follows, a delete or a clip taken off it closes the gap, a
- *     trim ripples. On other tracks nothing is covered: a clip put where another is goes to a free track, a delete
- *     leaves a gap. Off, the main track is like the others;
- *   · `linkage` (on, as CapCut's 联动): an edit of the main track carries the clips on the other tracks along with
- *     the main-track clips they start over, so titles, B-roll and sound stay with their picture.
+ * The timeline's switches, kept on this machine across projects, in the toolbar's order and all on by default:
+ *   · `magnet` (主轨磁吸): the main track (the lowest picture track) stays closed up — a clip put on it goes in between,
+ *     one deleted or taken off it closes up after it, a trim or a new speed there moves what follows. Off, the main
+ *     track is like the others (lib/timeline-edit);
+ *   · `snap` (自动吸附): drags line up with edges and the playhead; off means "it lands exactly where I let go";
+ *   · `linkage` (联动): titles, overlays and sounds riding on a main-track clip move with it and go with it;
+ *   · `previewAxis` (预览轴): the picture follows the pointer over the timeline, the playhead staying where it is.
  *
  * Clips sharing a `data-link` (a video and its detached sound) are always selected and edited together; ⌥-click picks
- * one alone. Premiere's sync lock is not offered: linkage does that job, the CapCut way.
- *
- * The inspector reads them too (a slower speed pushes the next clip only with the magnet on), so a change is told to
- * everyone listening.
+ * one alone. The inspector reads the switches too (a slower speed pushes the next clip only with the magnet on), so a
+ * change is told to everyone listening.
  */
 import { useSyncExternalStore } from 'react';
 
-export type TimelinePrefs = { snap: boolean; magnet: boolean; linkage: boolean };
+import type { Switches } from './timeline-edit.ts';
+
+export type TimelinePrefs = { snap: boolean; magnet: boolean; linkage: boolean; previewAxis: boolean };
 type Pref = keyof TimelinePrefs;
 
-const DEFAULTS: TimelinePrefs = { snap: true, magnet: true, linkage: true };
+const DEFAULTS: TimelinePrefs = { snap: true, magnet: true, linkage: true, previewAxis: true };
 const KEY: Record<Pref, string> = {
   snap: 'openfilm.timeline.snap',
-  /* new keys: the magnet now acts on the main track alone, and sync lock gave way to linkage, so the choices made
-     for the old switches do not carry over */
-  magnet: 'openfilm.timeline.mainMagnet',
-  linkage: 'openfilm.timeline.linkage',
+  /* new keys: the main track came back on 10-19 with its magnet and linkage, so choices made for the switches before
+     do not carry over */
+  magnet: 'openfilm.timeline.mainTrackMagnet',
+  linkage: 'openfilm.timeline.mainTrackLinkage',
+  previewAxis: 'openfilm.timeline.previewAxis',
 };
 
 /** Without localStorage (private window), the choices last this session. */
@@ -43,8 +42,13 @@ function read(pref: Pref): boolean {
 }
 
 export function readTimelinePrefs(): TimelinePrefs {
-  current ??= { snap: read('snap'), magnet: read('magnet'), linkage: read('linkage') };
+  current ??= { snap: read('snap'), magnet: read('magnet'), linkage: read('linkage'), previewAxis: read('previewAxis') };
   return current;
+}
+
+/** What an edit is planned by (lib/timeline-edit Switches), from the switches. */
+export function switchesOf(prefs: Pick<TimelinePrefs, 'magnet' | 'linkage'>): Switches {
+  return { magnet: prefs.magnet, linkage: prefs.linkage };
 }
 
 export function writeTimelinePref(pref: Pref, on: boolean): void {
@@ -64,9 +68,4 @@ function subscribe(fn: () => void): () => void {
 /** The switches, kept up to date wherever one is changed. */
 export function useTimelinePrefs(): TimelinePrefs {
   return useSyncExternalStore(subscribe, readTimelinePrefs, () => DEFAULTS);
-}
-
-/** What a ripple carries along (timeline-edit Follow), from the switches. */
-export function followOf(prefs: Pick<TimelinePrefs, 'linkage'>): { sync: boolean; linkage: boolean } {
-  return { sync: false, linkage: prefs.linkage };
 }

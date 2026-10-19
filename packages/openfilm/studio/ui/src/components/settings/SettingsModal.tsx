@@ -13,10 +13,12 @@ import { shortcutHint } from '@/lib/shortcut-hint';
 import { SHORTCUTS, type ShortcutKey } from '@/lib/timeline-keys';
 import { studioHost, type HostDeveloper, type HostUpdateState } from '@/lib/host';
 import { showWhatsNew } from '@/lib/whats-new';
+import { usePreviewPrefs, writePreviewPref } from '@/lib/preview-prefs';
 import { hasNotes, newestVersion } from '../WhatsNew';
 import { useWebUpdate } from '../UpdateButton';
 import { api, type StudioPrefs, type StudioVersion } from '@/api';
 import { AgentsSection } from './AgentsSection';
+import { DiagnosticsGroup } from './DiagnosticsGroup';
 import { ModelsSection } from './ModelsSection';
 import { ProvidersSection } from './ProvidersSection';
 import { SettingsSelect } from './SettingsSelect';
@@ -26,11 +28,11 @@ import { StorageGroup } from './StorageGroup';
 
 export type SettingsSection = 'general' | 'agents' | 'providers' | 'models' | 'developer' | 'shortcuts';
 
-/* the nav, in groups: what OpenFilm does, then help (Agents and Developer only inside an app with a chat:
-   lib/host.ts `agents`, `developer`) */
+/* the nav, in groups: what OpenFilm does, then help (Agents only inside an app with a chat: lib/host.ts `agents`;
+   Developer always, for its diagnostics) */
 const NAV: Array<{ group: 'settings' | 'help'; sections: SettingsSection[] }> = [
   { group: 'settings', sections: ['general', ...(studioHost?.agents ? ['agents' as const] : []), 'providers', 'models'] },
-  { group: 'help', sections: ['shortcuts', ...(studioHost?.developer ? ['developer' as const] : [])] },
+  { group: 'help', sections: ['shortcuts', 'developer'] },
 ];
 
 /** where OpenFilm lives, linked at the foot of the nav */
@@ -55,7 +57,7 @@ const SECTION_WORDS: Record<SettingsSection, string | string[]> = {
   agents: 'settings.agents',
   providers: 'settings.providers',
   models: 'settings.models',
-  developer: 'settings.developer',
+  developer: ['settings.developer', 'settings.report'],
   shortcuts: 'settings.shortcuts',
 };
 
@@ -247,11 +249,13 @@ function GeneralSection() {
 }
 
 /**
- * How the preview plays heavy footage (studio/server/proxies.mjs): from a lighter copy made in the background, as
- * CapCut's proxies, and how tall that copy is. Exports always read the originals.
+ * How the preview plays heavy footage (studio/server/proxies.mjs): from a lighter copy made in the background (a
+ * proxy), and how tall that copy is; whether pages draw at the viewer's size, and whether stretches that play
+ * late are rendered to play smoothly (lib/preview-prefs). Exports always read the originals and draw at full size.
  */
 function PlaybackGroup() {
   const t = useT();
+  const { fitPages, renders } = usePreviewPrefs();
   const [prefs, setPrefs] = React.useState<StudioPrefs | null>(null);
   React.useEffect(() => { void api.prefs().then(setPrefs).catch(() => {}); }, []);
   if (!prefs) return null;
@@ -280,6 +284,16 @@ function PlaybackGroup() {
           )}
         />
       ) : null}
+      <SettingsItem
+        title={t('settings.playback.fitPages')}
+        description={t('settings.playback.fitPagesHint')}
+        control={<SettingsSwitch checked={fitPages} onChange={(on) => writePreviewPref('fitPages', on)} label={t('settings.playback.fitPages')} />}
+      />
+      <SettingsItem
+        title={t('settings.playback.renders')}
+        description={t('settings.playback.rendersHint')}
+        control={<SettingsSwitch checked={renders} onChange={(on) => writePreviewPref('renders', on)} label={t('settings.playback.renders')} />}
+      />
     </SettingsGroup>
   );
 }
@@ -428,7 +442,11 @@ function AppAboutGroup() {
   );
 }
 
-/** What the app's chat shows of each turn: what it changed in the files, and its full log (lib/host.ts `developer`). */
+/**
+ * Diagnostics (DiagnosticsGroup), for when something does not work; how playing goes, in the viewer's corner
+ * (lib/preview-prefs `stats`); in the app, what its chat shows of each turn: what it changed in the files, and its
+ * full log (lib/host.ts `developer`).
+ */
 function DeveloperSection() {
   const t = useT();
   const developer = studioHost?.developer;
@@ -438,26 +456,36 @@ function DeveloperSection() {
     void developer.get().then(setPrefs);
     return developer.onChange(setPrefs);
   }, [developer]);
-  if (!developer) return null;
   const change = (next: Partial<HostDeveloper>) => {
     setPrefs((was) => (was ? { ...was, ...next } : was));
-    void developer.set(next);
+    void developer?.set(next);
   };
+  const { stats } = usePreviewPrefs();
   return (
     <SettingsPage note={t('settings.developer.intro')}>
-      <SettingsGroup title={t('settings.developer.group')} footnote={t('settings.developer.where')}>
-        {/* drawn once the app has said whether each is on: drawn off first, a switch slid on each time the page opened */}
+      <DiagnosticsGroup />
+      <SettingsGroup title={t('settings.developer.playbackGroup')}>
         <SettingsItem
-          title={t('settings.developer.changes')}
-          description={t('settings.developer.changesHint')}
-          control={prefs ? <SettingsSwitch checked={prefs.changes} label={t('settings.developer.changes')} onChange={(on) => change({ changes: on })} /> : null}
-        />
-        <SettingsItem
-          title={t('settings.developer.logs')}
-          description={t('settings.developer.logsHint')}
-          control={prefs ? <SettingsSwitch checked={prefs.logs} label={t('settings.developer.logs')} onChange={(on) => change({ logs: on })} /> : null}
+          title={t('settings.developer.playbackStats')}
+          description={t('settings.developer.playbackStatsHint')}
+          control={<SettingsSwitch checked={stats} onChange={(on) => writePreviewPref('stats', on)} label={t('settings.developer.playbackStats')} />}
         />
       </SettingsGroup>
+      {developer ? (
+        <SettingsGroup title={t('settings.developer.group')} footnote={t('settings.developer.where')}>
+          {/* drawn once the app has said whether each is on: drawn off first, a switch slid on each time the page opened */}
+          <SettingsItem
+            title={t('settings.developer.changes')}
+            description={t('settings.developer.changesHint')}
+            control={prefs ? <SettingsSwitch checked={prefs.changes} label={t('settings.developer.changes')} onChange={(on) => change({ changes: on })} /> : null}
+          />
+          <SettingsItem
+            title={t('settings.developer.logs')}
+            description={t('settings.developer.logsHint')}
+            control={prefs ? <SettingsSwitch checked={prefs.logs} label={t('settings.developer.logs')} onChange={(on) => change({ logs: on })} /> : null}
+          />
+        </SettingsGroup>
+      ) : null}
       {newestVersion() ? (
         <SettingsGroup title={t('settings.developer.releaseGroup')}>
           <SettingsItem

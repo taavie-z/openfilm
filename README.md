@@ -66,6 +66,7 @@ openfilm open   [folder | url]    # show a film in Studio: a new one, an existin
 openfilm look   [what] [t | a-b]  # check the film, a page or a media file: a contact sheet, one frame, or a range
 openfilm render [a-b]             # the MP4; --4k, --blur (motion blur), --alpha (.webm / .mov)
 openfilm get    [what]            # voice-over, music, sound effects, transcripts, images, video, from your services
+openfilm doctor                   # what this computer has for OpenFilm, to paste into an issue
 ```
 
 `openfilm <command> --help` lists a command's options; `openfilm get` alone lists what can be made and how to
@@ -140,11 +141,12 @@ PATH, and git.
 ```sh
 git clone https://github.com/openfilm/openfilm && cd openfilm
 pnpm install
-pnpm dev            # Studio from this checkout, with a sample film, apart from an installed OpenFilm
+pnpm dev            # Studio from this checkout, with a sample film, beside an installed OpenFilm
 pnpm test
 ```
 
-Open your coding agent in `packages/openfilm/.dev/projects` and it makes films with your checkout, in that Studio.
+Tell your coding agent to run `packages/openfilm/.dev/bin/openfilm` and it makes films with your checkout, in that
+Studio. Every OpenFilm, installed or from source, keeps its projects in the same library.
 
 `pnpm dev:desktop` runs the desktop app from source, and `pnpm typecheck`, `pnpm build` and `pnpm audit:public` do
 what they say.
@@ -153,7 +155,8 @@ what they say.
 ## Community
 
 Questions, ideas and films you made go to [Discussions](https://github.com/openfilm/openfilm/discussions): ask in
-Q&A, share your film in Show and tell. Bugs go to [Issues](https://github.com/openfilm/openfilm/issues).
+Q&A, share your film in Show and tell. Bugs go to [Issues](https://github.com/openfilm/openfilm/issues), with the
+report from Studio's Settings → Developer → Copy report (or `npx openfilm doctor`).
 
 ## Contributing
 

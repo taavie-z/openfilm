@@ -3,15 +3,15 @@ import { pathToFileURL } from 'node:url';
 import { frameSpan, nleRate, xmlEscape } from './nle.mjs';
 import { filmSubtitleCuesInRange, filmSubtitleSequence, filmSubtitleText } from './film-subtitle.mjs';
 
+const STEM_ROLES = { voice: 'dialogue.Voice', footage: 'dialogue.Footage', sfx: 'effects', music: 'music' };
 // FCP's bundled template identifier, resolved by FCP on import rather than by the exporting machine.
 const BASIC_TITLE = '.../Titles.localized/Bumper:Opener.localized/Basic Title.localized/Basic Title.moti';
 
 /**
  * @typedef {import('./nle.mjs').NleClip} NleClip
- * @typedef {import('./nle.mjs').NleTrack} NleTrack
  * @typedef {{ start: number, end: number, in: number, clip?: NleClip, children: string[] }} PrimarySegment
  * @typedef {{ enabled: boolean, lane: number, offset: number, kind: 'video' | 'audio',
- *   children?: string[], audioRole?: string }} ClipPlacement
+ *   children?: string[], audio?: string[], audioRole?: string }} ClipPlacement
  */
 
 /** XML attributes must preserve whitespace in names; text nodes keep literal line breaks. @param {string} value */
@@ -71,16 +71,18 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
     );
   }
   /** @param {NleClip} clip @param {ClipPlacement} placement */
-  const clipXml = (clip, { enabled, lane, offset, kind, children = [], audioRole }) => {
+  const clipXml = (clip, { enabled, lane, offset, kind, children = [], audio = [], audioRole }) => {
+    const tag = kind === 'video' ? 'clip' : 'audio';
     const pad = lane === 0 ? '            ' : '              ';
     const attrs = [
-      `ref="${clip.fileId}"`, `name="${attribute(clip.name)}"`, `lane="${lane}"`,
+      ...(kind === 'audio' ? [`ref="${clip.fileId}"`] : ['format="sequence-format"']), `name="${attribute(clip.name)}"`, `lane="${lane}"`,
       `offset="${time(offset)}"`, `start="${time(clip.in)}"`, `duration="${time(clip.end - clip.start)}"`,
-      `enabled="${enabled && clip.enabled ? 1 : 0}"`, `srcEnable="${kind}"`,
+      `enabled="${enabled && clip.enabled ? 1 : 0}"`,
     ];
-    if (audioRole) attrs.push(`audioRole="${attribute(audioRole)}"`);
-    const lines = [`${pad}<asset-clip ${attrs.join(' ')}>`];
+    if (audioRole) attrs.push(`role="${attribute(audioRole)}"`);
+    const lines = [`${pad}<${tag} ${attrs.join(' ')}>`];
     if (kind === 'video') {
+      lines.push(`${pad}  <video ref="${clip.fileId}" name="${attribute(clip.name)}" offset="${time(clip.in)}" start="${time(clip.in)}" duration="${time(clip.end - clip.start)}">`);
       // Disable automatic fitting: the planner's scale is relative to the source's own pixels.
       lines.push(`${pad}  <adjust-conform type="none"/>`);
       if (clip.motion) {
@@ -88,30 +90,50 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
         const position = `${decimal(center.h * width / height * 100)} ${decimal(-center.v * 100)}`;
         lines.push(`${pad}  <adjust-transform position="${position}" scale="${decimal(scale / 100)} ${decimal(scale / 100)}"/>`);
       }
+      // FCP keeps footage audio connected when it is nested inside the video component.
+      lines.push(...audio, `${pad}  </video>`);
     } else if (clip.levels?.length) {
       lines.push(`${pad}  <adjust-volume>`, `${pad}    <param name="amount">`, `${pad}      <keyframeAnimation>`);
       for (const key of clip.levels) {
-        lines.push(`${pad}        <keyframe time="${time(clip.in + key.when)}" value="${decibels(key.value)}" interp="linear" curve="linear"/>`);
+        lines.push(`${pad}        <keyframe time="${time(clip.in + key.when)}" value="${decibels(key.value)}"/>`);
       }
       lines.push(`${pad}      </keyframeAnimation>`, `${pad}    </param>`, `${pad}  </adjust-volume>`);
     } else if (clip.gain !== undefined) lines.push(`${pad}  <adjust-volume amount="${decibels(clip.gain)}"/>`);
-    return [...lines, ...children, `${pad}</asset-clip>`];
+    return [...lines, ...children, `${pad}</${tag}>`];
   };
   const main = timeline.video[0];
   const primary = primaryStoryline(main?.clips ?? [], timeline.durationFrames);
   const sourceTracks = [...new Set(timeline.audio.flatMap((track) => track.sourceTrack === undefined ? [] : [track.sourceTrack]))]
     .sort((a, b) => a - b);
   const audioRoles = new Map(sourceTracks.map((track, i) => [track, `OpenFilm A${i + 1}`]));
-  /** @param {NleTrack} track @param {number} lane @param {'video' | 'audio'} kind */
-  const connect = (track, lane, kind) => {
-    const audioRole = kind === 'audio' && track.sourceTrack !== undefined ? audioRoles.get(track.sourceTrack) : undefined;
+  /** Paired footage sound follows its own picture; unrelated sound stays connected to the primary storyline.
+   * @type {Map<string, { start: number, in: number, children: string[] }>}
+   */
+  const linked = new Map();
+  for (const segment of primary) {
+    if (!segment.clip?.linkGroup) continue;
+    const children = /** @type {string[]} */ ([]);
+    linked.set(segment.clip.linkGroup, { start: segment.start, in: segment.in, children });
+  }
+  const overlays = timeline.video.slice(1).flatMap((track, i) => track.clips.map((clip) => {
+    const { parent, offset } = connectionAt(primary, clip.start);
+    const audio = /** @type {string[]} */ ([]);
+    if (clip.linkGroup) linked.set(clip.linkGroup, { start: clip.start, in: clip.in, children: audio });
+    return { clip, parent, offset, lane: i + 1, enabled: track.enabled, audio };
+  }));
+  timeline.audio.forEach((track, i) => {
+    const role = track.role ? STEM_ROLES[track.role] : track.sourceTrack === undefined ? undefined : audioRoles.get(track.sourceTrack);
     for (const clip of track.clips) {
-      const { parent, offset } = connectionAt(primary, clip.start);
-      parent.children.push(...clipXml(clip, { enabled: track.enabled, lane, offset, kind, audioRole }));
+      const audioRole = clip.sourceRow ? `OpenFilm ${clip.sourceRow}` : role;
+      const picture = clip.linkGroup ? linked.get(clip.linkGroup) : undefined;
+      const parent = picture ?? connectionAt(primary, clip.start).parent;
+      const offset = parent.in + clip.start - parent.start;
+      parent.children.push(...clipXml(clip, { enabled: track.enabled, lane: -i - 1, offset, kind: 'audio', audioRole }));
     }
-  };
-  timeline.video.slice(1).forEach((track, i) => connect(track, i + 1, 'video'));
-  timeline.audio.forEach((track, i) => connect(track, -i - 1, 'audio'));
+  });
+  for (const { clip, parent, ...placement } of overlays) {
+    parent.children.push(...clipXml(clip, { ...placement, kind: 'video' }));
+  }
   const subtitleCues = filmSubtitleCuesInRange(cues, 0, timeline.durationFrames / rate.fps * 1000);
   const fontSize = decimal(Math.min(width, height) * 48 / 1080);
   let titleCount = 0;
@@ -138,7 +160,7 @@ export function fcpxmlDocument(timeline, { cues = [] } = {}) {
   }
   const spine = primary.flatMap((segment) => {
     if (segment.clip) return clipXml(segment.clip, {
-      enabled: main?.enabled ?? true, lane: 0, offset: segment.start, kind: 'video', children: segment.children,
+      enabled: main?.enabled ?? true, lane: 0, offset: segment.start, kind: 'video', children: segment.children, audio: segment.clip.linkGroup ? linked.get(segment.clip.linkGroup)?.children : undefined,
     });
     return [
       `            <gap name="OpenFilm" offset="${time(segment.start)}" start="0s" duration="${time(segment.end - segment.start)}">`,

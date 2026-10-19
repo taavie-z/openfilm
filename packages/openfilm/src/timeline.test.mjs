@@ -793,3 +793,198 @@ window.seen.push(look());await new Promise((r)=>setTimeout(r,150));window.seen.p
     await s.close();
   }
 });
+
+/**
+ * Play the film in its page as Studio's preview does (src/../studio/server/bridge.js): a frame each refresh, on the
+ * film's frame grid, for `seconds`, from film second 0. Says how long each frame took to draw (ms).
+ */
+async function playFor(film, seconds, fps = 30) {
+  return film.page.evaluate(async ([seconds, fps]) => {
+    const clock = window.filmHost?.now ?? performance.now.bind(performance);
+    const t0 = clock();
+    const took = [];
+    let last = -1;
+    while (clock() - t0 < seconds * 1000) {
+      await new Promise((r) => requestAnimationFrame(r));
+      const now = (clock() - t0) / 1000;
+      const t = Math.floor((now + 1 / 60) * fps + 1e-6) / fps;
+      if (t === last) continue;
+      last = t;
+      const s = clock();
+      await window.__filmEditor.watch(t, { rate: 1, now });
+      took.push(clock() - s);
+    }
+    return took;
+  }, [seconds, fps]);
+}
+
+test('playing, a video plays by itself on the film\'s clock, not sought frame by frame; a still moment stops it there', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-roll-'));
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=4', '-pix_fmt', 'yuv420p', '-g', '15', join(dir, 'clip.mp4')]);
+  writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'clip', src: 'clip.mp4' }] }] }));
+  const s = await open(dir);
+  try {
+    await s.film.page.evaluate(() => {
+      const v = document.getElementById('clip');
+      window.seeks = 0;
+      v.addEventListener('seeking', () => { window.seeks += 1; });
+    });
+    await playFor(s.film, 2);
+    const playing = await s.film.page.evaluate(() => { const v = document.getElementById('clip'); return { seeks: window.seeks, paused: v.paused, time: v.currentTime }; });
+    assert.ok(playing.seeks <= 2, `sought ${playing.seeks} times in two seconds of playing`);
+    assert.ok(!playing.paused && playing.time > 1.5, JSON.stringify(playing));
+    /* stopped: a still moment is the exact frame, the video paused there */
+    const still = await s.film.page.evaluate(async () => {
+      await window.__filmEditor.watch(1.25);
+      const v = document.getElementById('clip');
+      return { paused: v.paused, time: v.currentTime };
+    });
+    assert.ok(still.paused && Math.abs(still.time - 1.25) < 0.01, JSON.stringify(still));
+  } finally {
+    await s.close();
+  }
+});
+
+test('playing, a page\'s own video asked for frame by frame plays by itself, each frame drawn at once; stopped, it is where the page asked', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-footage-'));
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=5', '-pix_fmt', 'yuv420p', '-g', '15', join(dir, 'rec.mp4')]);
+  /* a page that draws its footage as SPEC §4 says: its time set to the frame wanted, then waited for */
+  writeFileSync(join(dir, 'page.html'), `<!doctype html><body style="margin:0"><video id="v" src="rec.mp4" muted playsinline preload="auto" style="width:320px;height:180px"></video>
+<script>
+const v = document.getElementById('v');
+window.asked = [];
+const seekTo = (want) => new Promise((ok) => {
+  const go = () => {
+    if (!v.seeking && v.readyState >= 2 && Math.abs(v.currentTime - want) < 0.002) return ok();
+    v.addEventListener('seeked', go, { once: true });
+    if (Math.abs(v.currentTime - want) >= 0.002) v.currentTime = want;
+  };
+  go();
+});
+window.film = {
+  duration: 4, width: 320, height: 180,
+  ready: new Promise((r) => (v.readyState >= 2 ? r() : v.addEventListener('loadeddata', r, { once: true }))),
+  frame(t) { const want = Math.floor(t * 30 + 1e-6) / 30 + 0.5 / 30; window.asked.push(want); return seekTo(want); },
+};
+</script></body>`);
+  writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'page', src: 'page.html' }] }] }));
+  const s = await open(dir);
+  try {
+    await s.film.page.evaluate(() => {
+      const v = document.getElementById('page').contentDocument.getElementById('v');
+      window.seeks = 0;
+      v.addEventListener('seeking', () => { window.seeks += 1; });
+    });
+    const took = await playFor(s.film, 2);
+    const playing = await s.film.page.evaluate(() => {
+      const page = document.getElementById('page').contentWindow;
+      const v = page.document.getElementById('v');
+      return { seeks: window.seeks, frames: page.asked.length, paused: v.paused, time: v.currentTime, said: v.currentTime === page.asked.at(-1) };
+    });
+    assert.ok(playing.frames >= 40, `${playing.frames} frames drawn`);
+    assert.ok(playing.seeks <= 4, `sought ${playing.seeks} times for ${playing.frames} frames`);
+    assert.ok(!playing.paused && playing.said, `it plays, and the page reads the time it asked for: ${JSON.stringify(playing)}`);
+    took.sort((a, b) => a - b);
+    assert.ok(took[Math.floor(took.length * 0.9)] < 20, `each frame drawn at once, not after a seek: ${took.slice(-5)}`);
+    /* stopped: the still moment is exact, as an export's */
+    const still = await s.film.page.evaluate(async () => {
+      await window.__filmEditor.watch(1.25);
+      const page = document.getElementById('page').contentWindow;
+      const v = page.document.getElementById('v');
+      return { paused: v.paused, time: v.currentTime, want: page.asked.at(-1) };
+    });
+    assert.ok(still.paused && Math.abs(still.time - still.want) < 0.002 && Math.abs(still.want - (37 / 30 + 0.5 / 30)) < 1e-6, JSON.stringify(still));
+  } finally {
+    await s.close();
+  }
+});
+
+test('playing through a stretch rendered for the preview, its render shows, the clips under it drawn only now and then; stopped, they are', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-'));
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:size=320x180:rate=30:duration=2', '-pix_fmt', 'yuv420p', join(dir, 'render.mp4')]);
+  /* a page that counts the frames it is asked for */
+  writeFileSync(join(dir, 'p.html'), `<!doctype html><body style="margin:0;background:#00f"><script>window.drawn=[];window.film={duration:4,width:320,height:180,frame(t){window.drawn.push(t)}}</script></body>`);
+  writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'p', src: 'p.html' }] }] }));
+  const s = await open(dir);
+  try {
+    const seen = await s.film.page.evaluate(async () => {
+      const page = document.getElementById('p').contentWindow;
+      window.__filmEditor.renders([{ a: 0.5, b: 2.5, src: 'render.mp4' }]);
+      const clock = window.filmHost?.now ?? performance.now.bind(performance);
+      const t0 = clock();
+      const log = [];
+      let last = -1;
+      while (clock() - t0 < 2700) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const now = (clock() - t0) / 1000;
+        const t = Math.floor((now + 1 / 60) * 30 + 1e-6) / 30;
+        if (t === last) continue;
+        last = t;
+        const before = page.drawn.length;
+        await window.__filmEditor.watch(t, { rate: 1, now });
+        const render = [...document.querySelectorAll('body > video')].at(-1);
+        log.push({ t, drew: page.drawn.length > before, render: render.style.visibility });
+      }
+      await window.__filmEditor.watch(1.5);
+      const render = [...document.querySelectorAll('body > video')].at(-1);
+      return { log, still: { drew: page.drawn.at(-1), render: render.style.visibility, paused: render.paused } };
+    });
+    const inside = seen.log.filter((f) => f.t >= 1 && f.t < 1.9);
+    assert.ok(inside.length > 10 && inside.every((f) => f.render === 'visible'), `inside the render: ${JSON.stringify(inside.slice(0, 3))}`);
+    /* under it, the clips are drawn only a few times a second, out of sight, so what they load comes as it would */
+    const drew = inside.filter((f) => f.drew).length;
+    assert.ok(drew >= 2 && drew <= 6, `drawn under the render ${drew} times in 0.9 s`);
+    assert.ok(seen.log.filter((f) => f.t < 0.4).every((f) => f.drew && f.render === 'hidden'), 'before it: the film itself');
+    assert.ok(seen.log.filter((f) => f.t >= 2.1 && f.t < 2.45).every((f) => f.drew), 'just before it ends: the clips are drawn again under it');
+    assert.ok(seen.log.filter((f) => f.t >= 2.55).every((f) => f.drew && f.render === 'hidden'), 'after it: the film itself');
+    assert.deepEqual(seen.still, { drew: 1.5, render: 'hidden', paused: true }, 'stopped: the film itself, exact');
+  } finally {
+    await s.close();
+  }
+});
+
+for (const playing of [true, false]) test(`${playing ? 'playing' : 'scrubbing'}, frames asked before the last is drawn (a host giving up on a slow one) do not leave a page's footage sought back and forth`, { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-giveup-'));
+  /* a heavy recording, a key frame in five seconds: each seek takes a while, so frames overlap */
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30:duration=5', '-pix_fmt', 'yuv420p', '-g', '150', join(dir, 'rec.mp4')]);
+  writeFileSync(join(dir, 'page.html'), `<!doctype html><body style="margin:0"><video id="v" src="rec.mp4" muted playsinline preload="auto"></video>
+<script>
+const v = document.getElementById('v');
+const seekTo = (want) => new Promise((ok) => {
+  const go = () => {
+    if (!v.seeking && v.readyState >= 2 && Math.abs(v.currentTime - want) < 0.002) return ok();
+    v.addEventListener('seeked', go, { once: true });
+    if (Math.abs(v.currentTime - want) >= 0.002) v.currentTime = want;
+  };
+  go();
+});
+window.film = { duration: 4, width: 320, height: 180,
+  ready: new Promise((r) => (v.readyState >= 2 ? r() : v.addEventListener('loadeddata', r, { once: true }))),
+  frame(t) { return seekTo(Math.floor(t * 30 + 1e-6) / 30 + 0.5 / 30); } };
+</script></body>`);
+  writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'page', src: 'page.html' }] }] }));
+  const s = await open(dir);
+  try {
+    const seen = await s.film.page.evaluate(async (playing) => {
+      const v = document.getElementById('page').contentDocument.getElementById('v');
+      let seeks = 0;
+      v.addEventListener('seeking', () => { seeks += 1; });
+      /* ten frames, each asked before the one before is drawn, far apart in the file (each one a real seek), as a
+         host that gave up on each in turn would */
+      const drawn = [];
+      for (const t of [0, 2, 0.7, 3.1, 1.4, 2.6, 0.2, 1.9, 3.5, 1]) {
+        drawn.push(window.__filmEditor.watch(t, playing ? { rate: 1, now: t } : null));
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      const all = await Promise.race([Promise.all(drawn.slice(-1)).then(() => true), new Promise((r) => setTimeout(() => r(false), 5000))]);
+      /* left alone a moment: nothing goes on seeking by itself */
+      const after = seeks;
+      await new Promise((r) => setTimeout(r, 1000));
+      return { all, seeks, more: seeks - after };
+    }, playing);
+    assert.ok(seen.all, 'the last frame drawn');
+    assert.equal(seen.more, 0, `still seeking on its own: ${JSON.stringify(seen)}`);
+  } finally {
+    await s.close();
+  }
+});

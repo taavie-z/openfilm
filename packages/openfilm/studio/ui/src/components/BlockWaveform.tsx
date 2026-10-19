@@ -3,7 +3,7 @@
  * where it is silent — and "did this cut land mid-word" can only be seen on the waveform.
  *
  * Drawn from the bottom, not mirrored: sound rows are short, and a mirrored waveform leaves half the height each way.
- * A skyline still reads when low (CapCut draws it this way). On a canvas, not hundreds of divs: dozens of clips with
+ * A skyline still reads when low. On a canvas, not hundreds of divs: dozens of clips with
  * hundreds of peaks each would be tens of thousands of nodes.
  *
  * Peaks come from the server: GET media?what=wave&path= → `{ duration (s), peaks }`, 40 peaks a second, 0..1;
@@ -25,6 +25,45 @@ const PEAKS_PER_SECOND = 40;
 
 /** At most this many device pixels per canvas: past the browser's limit a canvas goes blank. */
 const MAX_CANVAS_PX = 4096;
+/** A change this soon after the last drawing is drawn once the changes stop for as long (ms). */
+const BURST_MS = 150;
+
+/*
+ * Drawings waiting, done a few a frame (FRAME_BUDGET_MS of them at most): a zoom of a film with hundreds of sounds redrew
+ * them all in one go, a long freeze. A newer drawing of a canvas replaces its older one; the stretched old bitmap holds
+ * until it is done.
+ */
+const FRAME_BUDGET_MS = 6;
+const waiting = new Map<HTMLCanvasElement, () => void>();
+let drawing = 0;
+function drawSoon(el: HTMLCanvasElement, draw: () => void) {
+  waiting.set(el, draw);
+  if (!drawing) drawing = requestAnimationFrame(drawSome);
+}
+function drawSome() {
+  drawing = 0;
+  const start = performance.now();
+  for (const [el, draw] of waiting) {
+    waiting.delete(el);
+    draw();
+    if (performance.now() - start > FRAME_BUDGET_MS) break;
+  }
+  if (waiting.size) drawing = requestAnimationFrame(drawSome);
+}
+
+/* the color a waveform is drawn in, read once per color and theme: read from each canvas, each drawing laid out the
+   page's styles again */
+const colors = new Map<string, string>();
+function colorOf(el: HTMLCanvasElement, color: string, theme: unknown): string {
+  const key = `${String(theme)}\0${color}`;
+  let c = colors.get(key);
+  if (!c) {
+    c = getComputedStyle(el).color || color;
+    if (colors.size > 64) colors.clear();
+    colors.set(key, c);
+  }
+  return c;
+}
 
 /** Waveforms already fetched: the same sound is drawn again on every drag and zoom. */
 const CACHE = new Map<string, Wave>();
@@ -100,7 +139,9 @@ export function BlockWaveform({
 
   React.useEffect(() => {
     let alive = true;
-    void loadWave(url).then((wave) => { if (alive) setLoaded({ url, wave }); });
+    /* the same wave already in hand (from the cache) renders nothing: a clip drawn as it scrolls into view is not
+       drawn twice */
+    void loadWave(url).then((wave) => { if (alive) setLoaded((cur) => (cur.url === url && cur.wave === wave ? cur : { url, wave })); });
     return () => { alive = false; };
   }, [url]);
 
@@ -110,11 +151,15 @@ export function BlockWaveform({
   const to = Math.max(from, Math.min(width, Math.ceil(visiblePx?.to ?? width)));
   const sliceW = to - from;
 
+  /* when it was last drawn: a change soon after is part of a burst (a zoom, a scroll) */
+  const drawnAt = React.useRef(-Infinity);
   React.useEffect(() => {
     const el = ref.current;
     if (!el || !wave?.peaks.length || sliceW <= 0 || height <= 0) return undefined;
-    /* drawn on the next frame, so a burst of zoom steps draws once (the stretched old bitmap holds meanwhile) */
-    const frame = requestAnimationFrame(() => {
+    /* drawn soon (see drawSoon); in a burst of zoom or scroll steps, once the burst stops (the stretched old bitmap
+       holds meanwhile): redrawn at every step, the waveforms were most of what a zoom cost */
+    const draw = () => {
+      drawnAt.current = performance.now();
       /* capped in device pixels, not CSS pixels: capping CSS pixels would also drop Retina's 2×, and this layer is
          thin enough that blur makes it useless. Full ratio while it fits, down to 1× at the cap. */
       const drawW = Math.min(Math.round(sliceW), MAX_CANVAS_PX);
@@ -125,7 +170,7 @@ export function BlockWaveform({
       if (!ctx) return;
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, drawW, height);
-      ctx.fillStyle = getComputedStyle(el).color || color;
+      ctx.fillStyle = colorOf(el, color, theme);
 
       /* one column per pixel: more peaks than pixels takes the maximum (sampling would miss a drum hit and draw
          silence); fewer peaks than pixels interpolates (nearest-peak steps are the sampling grid, not the sound) */
@@ -140,8 +185,9 @@ export function BlockWaveform({
         ctx.rect(x, height - h, 1, h);
       }
       ctx.fill();
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    const timer = window.setTimeout(() => drawSoon(el, draw), performance.now() - drawnAt.current < BURST_MS ? BURST_MS : 0);
+    return () => { window.clearTimeout(timer); waiting.delete(el); };
   }, [wave, width, height, color, inMs, durMs, from, sliceW, theme]);
 
   if (!wave?.peaks.length || sliceW <= 0) return null;

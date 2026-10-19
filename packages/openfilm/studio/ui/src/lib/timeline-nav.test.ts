@@ -33,21 +33,21 @@ test('the cuts ↑ / ↓ go to: every clip edge on tracks seen and not locked, o
 test('⌘B splits the selected clips under the playhead, else the main track\'s, else the targeted track\'s, else the top one seen', () => {
   const tracks = [
     row(0, [['top', 0, 4]], { hidden: true }),
-    row(1, [['v', 0, 4]]),
+    row(1, [['v', 0, 4], ['v2', 9, 12]]),
     row(2, [['locked', 0, 4]], { locked: true }),
     row(3, [['s', 0, 4], ['s2', 4, 8]]),
+    row(4, [['m', 0, 12]], { role: 'audio', kind: 'audio' }),
   ];
   const ids = (bs: TimelineBlock[]) => bs.map((b) => b.clipId);
   assert.deepEqual(ids(splitTargets(tracks, ['b-s', 'b-s2', 'b-locked'], 2000, null)), ['s'], 'selected and under it, not locked');
   assert.deepEqual(ids(splitTargets(tracks, ['b-s2'], 2000, null)), [], 'a selection the playhead is not over: nothing');
-  assert.deepEqual(ids(splitTargets(tracks, [], 2000, 'doc-1')), ['s'], 'the main track before the targeted one');
-  /* no main-track clip to split (its track locked): the targeted track's, and a locked target splits nothing */
-  assert.deepEqual(ids(splitTargets(tracks.slice(0, 3), [], 2000, 'doc-1')), ['v']);
-  assert.deepEqual(ids(splitTargets(tracks.slice(0, 3), [], 2000, 'doc-2')), [], 'a locked target: nothing');
-  assert.deepEqual(ids(splitTargets(tracks, [], 2000, null)), ['s'], 'the main track: the lowest picture track');
-  assert.deepEqual(ids(splitTargets(tracks.slice(0, 3), [], 2000, null)), ['v'], 'a locked main track: the top one seen, not a hidden one');
-  assert.deepEqual(ids(splitTargets(tracks, [], 4000, null)), [], 'on a cut there is nothing to split');
-  assert.deepEqual(ids(splitAllTargets(tracks, 2000)), ['top', 'v', 's']);
+  assert.deepEqual(ids(splitTargets(tracks, [], 2000, 'doc-1')), ['s'], 'the main track (the lowest picture track) first');
+  /* past the main track's end: the targeted track, else the top one seen */
+  assert.deepEqual(ids(splitTargets(tracks, [], 10_000, 'doc-4')), ['m'], 'the targeted track');
+  assert.deepEqual(ids(splitTargets(tracks, [], 10_000, 'doc-2')), [], 'a locked target: nothing');
+  assert.deepEqual(ids(splitTargets(tracks, [], 10_000, null)), ['v2'], 'no target: the top one seen, not a hidden one');
+  assert.deepEqual(ids(splitTargets(tracks, [], 4000, 'doc-1')), [], 'on a cut there is nothing to split');
+  assert.deepEqual(ids(splitAllTargets(tracks, 2000)), ['top', 'v', 's', 'm']);
 });
 
 test('[ and ] select every clip with a part before or after the playhead, on tracks not locked', () => {
@@ -67,23 +67,24 @@ const filmOf = (m: EditTrack[]) => ({ tracks: m.map((t) => ({ ...(t.locked ? { l
 const starts = (m: EditTrack[], ops: Op[]) => (applyOps(filmOf(m) as never, ops as never) as { tracks: { clips: { id: string; at?: number }[] }[] }).tracks
   .map((t) => t.clips.map((c) => [c.id, Math.round((c.at ?? 0) * 1000)]));
 
-test('⌥ → moves the selection a frame: into free time with the magnet, over what is there without it', () => {
+test('⌥ → moves the selection a frame, on the frame grid, stopping against a clip in the way', () => {
   const m: EditTrack[] = [{ index: 0, clips: [clip('a', 0, 2), clip('b', 3, 4)] }, { index: 1, clips: [clip('c', 2, 3)] }];
-  const one = planNudge(m, ['a'], 1, { mode: 'insert', sync: true })!;
-  assert.deepEqual(starts(m, one.ops)[0], [['a', 33], ['b', 3000]]);
+  assert.deepEqual(starts(m, planNudge(m, ['a'], 1)!.ops)[0], [['a', 33], ['b', 3000]]);
   /* back from 0: nowhere to go */
-  assert.equal(planNudge(m, ['a'], -1, { mode: 'insert', sync: true }), null);
-  /* c touches nothing on its track: it moves either way, on the frame grid */
-  assert.deepEqual(starts(m, planNudge(m, ['c'], -1, { mode: 'overwrite', sync: true })!.ops)[1], [['c', 1967]]);
-  /* b against a's end: with the magnet it stops there, without it it covers a frame of a */
+  assert.equal(planNudge(m, ['a'], -1), null);
+  assert.deepEqual(starts(m, planNudge(m, ['c'], -1)!.ops)[1], [['c', 1967]]);
+  /* b against a's end: nowhere to go, a is not cut */
   const tight: EditTrack[] = [{ index: 0, clips: [clip('a', 0, 2), clip('b', 2, 4)] }];
-  assert.equal(planNudge(tight, ['b'], -1, { mode: 'insert', sync: true }), null);
-  const over = planNudge(tight, ['b'], -1, { mode: 'overwrite', sync: true })!;
-  assert.deepEqual(starts(tight, over.ops)[0], [['a', 0], ['b', 1967]]);
+  assert.equal(planNudge(tight, ['b'], -1), null);
+  /* half a frame from a: b goes the half frame and stops against it */
+  const near: EditTrack[] = [{ index: 0, clips: [clip('a', 0, 2), clip('b', 2.02, 4)] }];
+  assert.deepEqual(starts(near, planNudge(near, ['b'], -1)!.ops)[0], [['a', 0], ['b', 2000]]);
+  /* moving together, they stop against what is not moving */
+  const both: EditTrack[] = [{ index: 0, clips: [clip('a', 0, 2), clip('b', 2, 4), clip('c', 4.02, 5)] }];
+  assert.deepEqual(starts(both, planNudge(both, ['a', 'b'], 1)!.ops)[0], [['a', 20], ['b', 2020], ['c', 4020]]);
   /* a locked track does not move */
   const locked: EditTrack[] = [{ index: 0, locked: true, clips: [clip('a', 1, 2)] }];
-  assert.equal(planNudge(locked, ['a'], 1, { mode: 'overwrite', sync: true }), null);
-  assert.equal(planNudge(locked, ['a'], 1, { mode: 'insert', sync: true }), null);
+  assert.equal(planNudge(locked, ['a'], 1), null);
 });
 
 test('a track\'s name follows its clips when tracks move, and its place when it has none', () => {

@@ -6,7 +6,7 @@
  *
  * There is one landing rule (assetDropSpot) and both the preview and the drop ask it, so a file lands where its
  * preview was drawn. Its first rule: never stack on a clip on the same track — stacked clips spread into two rows that
- * share a badge and look broken. With an edit mode (the timeline's magnet), a file dropped onto a track goes onto it
+ * share a badge and look broken. With an edit mode asked for (⌥: an overwrite), a file dropped onto a track goes onto it
  * whatever is there: an insert pushes it on, an overwrite cuts it out (lib/timeline-edit planRoom), and only the empty
  * space above or below the tracks opens a new one. Without one, a taken spot opens a new track, shown by a line.
  */
@@ -36,8 +36,8 @@ export function assetClipKindOf(file: { path: string; kind: string }): AssetClip
 }
 
 /**
- * How long a dropped still, or a web page without a duration, stays: four seconds, as in Final Cut (Premiere and
- * Resolve use five). The number matters less than having one: neither has a length, a drag cannot ask for one, and
+ * How long a dropped still, or a web page without a duration, stays: four seconds. The number matters less than
+ * having one: neither has a length, a drag cannot ask for one, and
  * film.html needs a length for it (`#t=0,4`). A person can pull the edge right after. (An agent writing film.html
  * gives the fragment itself.)
  */
@@ -63,7 +63,7 @@ export type StageSize = { w: number; h: number };
 
 /**
  * Where a dropped video or still sits: in its own shape, as large as the canvas holds, centered, so one side meets the
- * canvas's edge (as CapCut places it). Without a box it would be the whole canvas with the picture letterboxed inside
+ * canvas's edge. Without a box it would be the whole canvas with the picture letterboxed inside
  * it, and the box a person picks would not be the picture. None when its shape is the canvas's, or not known yet.
  */
 export function assetFitBox(file: { w?: number | undefined; h?: number | undefined }, stage: StageSize | null | undefined): FilmBox | null {
@@ -182,8 +182,8 @@ export function assetDropSpot(
     if (edit || !rangeOverlaps(range, occupiedOf(tracks, target.docIndex ?? null, hit.lane))) {
       return { action: 'into', laneIndex: hit.lane, lane: target.lane, docIndex: target.docIndex ?? null, locked: false };
     }
-    /* the time is taken: no stacking, a new track right under this one (newTrackSide) */
-    if (target.docIndex != null) return newTrackSpot(tracks, newTrackSide(target.docIndex));
+    /* the time is taken: no stacking, a new track beside this one (newTrackSide) */
+    if (target.docIndex != null) return newTrackSpot(tracks, newTrackSide(target.docIndex, target.role));
     /* a row not on film.html cannot open a track: land on it as it is */
     return { action: 'into', laneIndex: hit.lane, lane: target.lane, docIndex: null, locked: false };
   }

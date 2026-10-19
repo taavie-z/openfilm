@@ -6,7 +6,7 @@ const press = (key: string, mods: Partial<KeyPress> = {}): KeyPress => ({ key, m
 const mac = (key: string, mods: Partial<KeyPress> = {}) => keyCommandOf(press(key, mods), true);
 const win = (key: string, mods: Partial<KeyPress> = {}) => keyCommandOf(press(key, mods), false);
 
-test('the keys, as Premiere and CapCut have them', () => {
+test('the keys', () => {
   assert.equal(mac('j'), 'shuttle-back');
   assert.equal(mac('k'), 'shuttle-stop');
   assert.equal(mac('L'), 'shuttle-forward');
@@ -31,7 +31,13 @@ test('the keys, as Premiere and CapCut have them', () => {
   assert.equal(mac('ArrowRight', { altKey: true }), 'nudge-forward');
   assert.equal(mac('Z', { shiftKey: true }), 'zoom-fit');
   assert.equal(mac('n'), 'toggle-snap');
+  /* the switches: P (and ⇧N) the main-track magnet, ~ linkage, S the preview axis */
   assert.equal(mac('N', { shiftKey: true }), 'toggle-magnet');
+  assert.equal(mac('p'), 'toggle-magnet');
+  assert.equal(mac('`'), 'toggle-linkage');
+  assert.equal(mac('~', { shiftKey: true }), 'toggle-linkage');
+  assert.equal(mac('s'), 'toggle-preview-axis');
+  assert.equal(mac('S', { shiftKey: true, ctrlKey: true }), 'detach-audio');
   assert.equal(mac('q'), 'ripple-start');
   assert.equal(mac('w'), 'ripple-end');
   assert.equal(mac(','), 'insert-source');
@@ -46,13 +52,13 @@ test('M adds a marker, ⇧M and ⌥M go to the next and the one before (⌥M typ
   assert.equal(keyCommandOf({ ...press('µ', { altKey: true }), code: 'KeyM' }, true), 'prev-marker');
   assert.equal(win('m', { altKey: true }), 'prev-marker');
   assert.equal(mac('m', { metaKey: true }), null);
-  assert.equal(mac('m', { altKey: true, shiftKey: true }), 'prev-marker', '⌥⇧M too, as CapCut\'s');
+  assert.equal(mac('m', { altKey: true, shiftKey: true }), 'prev-marker', '⌥⇧M too');
 });
 
-test('CapCut\'s keys (its Final Cut Pro X set on a Mac): P, ~, ⇧X, ⌥X, ⌘R, ⇧⌃S, ⌘⇧C, ⌘⇧V', () => {
+test('the switch, range, speed, sound and attribute keys: P, ~, S, ⇧X, ⌥X, ⌘R, ⇧⌃S, ⌘⇧C, ⌘⇧V', () => {
   assert.equal(mac('p'), 'toggle-magnet');
   assert.equal(keyCommandOf({ ...press('`'), code: 'Backquote' }, true), 'toggle-linkage');
-  assert.equal(keyCommandOf({ ...press('~', { shiftKey: true }), code: 'Backquote' }, true), 'toggle-linkage');
+  assert.equal(mac('s'), 'toggle-preview-axis');
   assert.equal(mac('X', { shiftKey: true }), 'range-clip');
   assert.equal(keyCommandOf({ ...press('≈', { altKey: true }), code: 'KeyX' }, true), 'clear-range');
   assert.equal(mac('r', { metaKey: true }), 'speed');

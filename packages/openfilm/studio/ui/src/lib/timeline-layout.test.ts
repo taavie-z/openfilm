@@ -117,6 +117,7 @@ test('every rate a project can have puts a labeled tick on each whole second, at
   }
 });
 
+
 test('the main track is marked: the lowest picture track, as the magnet takes it', () => {
   const two = { stage: doc.stage, tracks: [{ clips: [{ src: 'assets/footage/product.mp4', id: 'top', time: [0, 2] }] }, doc.tracks[0]!] };
   const top = { key: 'top#0.0', src: 'assets/footage/product.mp4', startMs: 0, durMs: 2000, inMs: 0, sourceDurMs: 10_000, loc: 'film.html#0.0', track: { index: 0, name: 'video', kind: 'video' }, clipId: 'top' };

@@ -12,7 +12,7 @@
  * runs, so an agent installed meanwhile is found without restarting it. Reads no Electron module, so `node --test`
  * can use it.
  */
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { homedir, userInfo } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 

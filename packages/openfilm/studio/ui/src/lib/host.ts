@@ -92,6 +92,8 @@ export interface StudioHost {
     locate?: (id: HostAgentId, words?: { title?: string; button?: string }) => Promise<{ ok: boolean; error?: string; code?: 'not-a-program' | 'did-not-start' | string }>;
     useAutomatic?: (id: HostAgentId) => Promise<unknown>;
     diagnose?: (id: HostAgentId) => Promise<HostAgentDiagnosis | null>;
+    /** The app's part of Settings → Developer's diagnostic report: the app, and each agent's program, version and state, as text. */
+    report?: () => Promise<string>;
     /**
      * One of the person's own models set up (no `id`) or changed: checked before it is kept. A key left empty keeps its
      * own, or takes the one of another model on the same address.
@@ -144,7 +146,8 @@ export interface StudioHost {
    * its top bar (where the projects button and the title are otherwise), with a `+` that opens the projects window to
    * pick the project a new tab shows (`open`; one open already is shown). With no tab open the page is at `/`, and
    * Studio shows the projects there. `list` gives the tabs and which is this page's (`self`); `onChange` every change.
-   * A page `report`s what it shows (its title, an export's progress, its project gone: its tab closes). Studio's
+   * A page `report`s what it shows (its title, an export's progress, its project gone: its tab closes), and `retitle`s
+   * another tab whose project it renamed. Studio's
    * "open this project" (heard by every page) goes to `openRequest`, which the app settles once; `onPick` is the app
    * asking for the projects window (a new tab from its menu).
    */
@@ -157,6 +160,8 @@ export interface StudioHost {
     open: (projectId: string) => void;
     move: (id: string, index: number) => void;
     report: (state: { title?: string; exporting?: number | null; gone?: boolean }) => void;
+    /** another tab's title, its project renamed from this page's tabs (its page may be gone, and cannot say it) */
+    retitle?: (id: string, title: string) => Promise<unknown>;
     openRequest: (to: string) => void;
     onPick: (listener: () => void) => () => void;
   };

@@ -78,9 +78,9 @@ const fades = (value: FilmValue) => Object.fromEntries(value.tracks.flatMap((t) 
   return f ? [[c.id, f]] : [];
 }));
 
-const opts = (more: Partial<TransitionOpts> = {}): TransitionOpts => ({ ripple: true, sync: false, linked: true, whiteSrc: WHITE, ...more });
+const opts = (more: Partial<TransitionOpts> = {}): TransitionOpts => ({ ripple: true, linked: true, whiteSrc: WHITE, ...more });
 
-test('cross dissolve: the incoming clip goes above, d earlier, and fades in over the outgoing one, which stays whole; with the magnet what follows closes up', () => {
+test('cross dissolve: the incoming clip goes above, d earlier, and fades in over the outgoing one, which stays whole; what follows closes up', () => {
   const value = film([['a', 0, 4], ['b', 4, 8], ['c', 8, 10]]);
   const { model, facts } = read(value);
   const next = apply(value, planTransition(model, facts, 'dissolve', { a: 'a', b: 'b' }, 500, opts()));
@@ -101,13 +101,13 @@ test('cross dissolve: the incoming clip goes above, d earlier, and fades in over
   assert.deepEqual(fades(back), {});
 });
 
-test('cross dissolve without the magnet leaves what follows where it is; with sync lock other tracks close up too', () => {
+test('cross dissolve without a ripple leaves what follows where it is; with one the cut\'s track closes up', () => {
   const value = film([['a', 0, 4], ['b', 4, 8], ['c', 8, 10]], [['m', 0, 3], ['n', 9, 10]]);
   const { model, facts } = read(value);
   const still = apply(value, planTransition(model, facts, 'dissolve', { a: 'a', b: 'b' }, 1000, opts({ ripple: false })));
   assert.deepEqual(layout(still), [[['b', 3, 7]], [['a', 0, 4], ['c', 8, 10]], [['m', 0, 3], ['n', 9, 10]]]);
-  const synced = apply(value, planTransition(model, facts, 'dissolve', { a: 'a', b: 'b' }, 1000, opts({ sync: true })));
-  assert.deepEqual(layout(synced), [[['b', 3, 7]], [['a', 0, 4], ['c', 7, 9]], [['m', 0, 3], ['n', 8, 9]]]);
+  const closed = apply(value, planTransition(model, facts, 'dissolve', { a: 'a', b: 'b' }, 1000, opts()));
+  assert.deepEqual(layout(closed), [[['b', 3, 7]], [['a', 0, 4], ['c', 7, 9]], [['m', 0, 3], ['n', 9, 10]]]);
 });
 
 test('cross dissolve takes the incoming clip\'s linked sound along: it overlaps on a sound track below, the sounds crossfade', () => {

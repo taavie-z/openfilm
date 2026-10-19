@@ -184,10 +184,13 @@ test('a film whose clips have no ids comes back with each named after its file, 
   assert.deepEqual(film.value.tracks[0].clips.map((c) => c.id), ['title', 'title-2']);
 });
 
-test('rename renames the folder; delete moves it to the Trash and off the list', async () => {
+test('rename renames the folder and tells the pages showing it; delete moves it to the Trash and off the list', async () => {
   const { project } = await (await api('/api/projects', { method: 'POST', body: { name: 'Draft' } })).json();
+  const events = collect(`/api/projects/${project.id}/events`, (e) => e.some((x) => x.type === 'project'));
+  await new Promise((r) => setTimeout(r, 300));
   const renamed = await (await api(`/api/projects/${project.id}`, { method: 'PATCH', body: { name: 'Final' } })).json();
   assert.equal(renamed.project.name, 'Final');
+  assert.equal((await events).find((e) => e.type === 'project').project.name, 'Final');
   assert.ok(existsSync(renamed.project.path));
   assert.equal((await api(`/api/projects/${project.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await api(`/api/projects/${project.id}`)).status, 404);
@@ -713,4 +716,24 @@ test('a frame from a page larger than the cap closes its stream; small ones are 
   socket.write(masked(0x2, [0x80 | 127, ...length]));
   await closed;
   assert.ok(Buffer.concat(got).includes(Buffer.from([0x88, 2, 0x03, 0xf1])), 'a close saying the message was too big');
+});
+
+test('Settings moves the library: how many projects it holds, then the folder and, when asked, its projects', async () => {
+  const before = await (await api('/api/locations')).json();
+  const { project } = await (await api('/api/projects', { method: 'POST', body: { name: 'To move' } })).json();
+  assert.equal((await (await api('/api/locations')).json()).projects.count, before.projects.count + 1);
+  const to = join(scratch, 'Moved library');
+  const res = await api('/api/locations/projects', { method: 'PUT', body: { path: to, move: true } });
+  const done = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(done.failed.length, 0);
+  assert.equal(done.locations.projects.path, to);
+  assert.equal(done.locations.projects.chosen, true);
+  assert.ok(existsSync(join(to, 'To move', 'film.html')));
+  const listed = (await (await api('/api/projects')).json()).projects.find((p) => p.id === project.id);
+  assert.equal(listed.path, join(realpathSync(to), 'To move'), 'the same project, at its new folder');
+  assert.equal((await api('/api/locations/projects', { method: 'PUT', body: { path: 'relative' } })).status, 400);
+  const back = await (await api('/api/locations/projects', { method: 'PUT', body: { path: null, move: true } })).json();
+  assert.equal(back.locations.projects.chosen, false);
+  assert.ok(existsSync(join(back.locations.projects.path, 'To move', 'film.html')), 'and back to the default');
 });

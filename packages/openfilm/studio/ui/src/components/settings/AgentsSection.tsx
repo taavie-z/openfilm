@@ -28,6 +28,7 @@ import { ProviderMark } from './ProviderMark';
 import { agentMark } from '@/lib/provider-marks';
 import { SettingsSelect } from './SettingsSelect';
 import { SettingsButton, SettingsField, SettingsGroup, SettingsInset, SettingsItem, SettingsLinkButton, SettingsPage, SettingsStatus, SettingsSwitch, settingsError } from './ui';
+import { ReportLink } from './DiagnosticsGroup';
 
 function useHostAgents(): HostAgent[] | null {
   const [agents, setAgents] = React.useState<HostAgent[] | null>(null);
@@ -316,6 +317,8 @@ export function AgentsSection() {
             ) : null}
             {open ? <OwnModels agent={agent} onDone={() => setKeyOpen(false)} /> : null}
             {said ? <p className={settingsError}>{said}</p> : null}
+            {/* what to send when it keeps failing */}
+            {said ? <ReportLink /> : null}
           </div>
         ) : null}
       </SettingsItem>

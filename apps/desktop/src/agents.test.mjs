@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CLIENT_CAPABILITIES, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, errorCause, legacyOptions, powerShellScript, readAgentStatus, signInError, codexTooOld } from './agents.mjs';
+import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld } from './agents.mjs';
 
 test('an agent that asks: yes for good where it offers that, else yes this once; nothing to say yes with is null', () => {
   const options = [
@@ -22,6 +22,17 @@ test("the protocol's older model and mode lists read as the config options the c
   assert.deepEqual(options.map((o) => [o.id, o.category, o.currentValue]), [['model', 'model', 'auto'], ['mode', 'mode', 'yolo']]);
   assert.deepEqual(options[0].options[1], { value: 'pro', name: 'Pro', description: 'slow' });
   assert.deepEqual(legacyOptions({}), []);
+});
+
+test('a choice an agent lists twice shows once in the menu', () => {
+  /* GitHub Copilot 1.0.98 lists its model "auto" twice */
+  const [model, mode] = distinctOptions([
+    { id: 'model', currentValue: 'auto', options: [{ value: 'auto', name: 'Auto' }, { value: 'auto', name: 'Auto', description: 'Auto' }, { value: 'gpt', name: 'GPT' }] },
+    { id: 'mode', currentValue: 'agent', options: [{ value: 'agent', name: 'Agent' }, { value: 'plan', name: 'Plan' }] },
+  ]);
+  assert.deepEqual(model.options, [{ value: 'auto', name: 'Auto' }, { value: 'gpt', name: 'GPT' }]);
+  assert.deepEqual(mode.options.map((o) => o.value), ['agent', 'plan']);
+  assert.equal(distinctOptions(null), null);
 });
 
 test('whose sign-in it is, as each program says it, never a key', () => {
@@ -110,6 +121,12 @@ test('the chat says it signs in in Terminal, so Claude Code offers its subscript
   assert.equal(zClientCapabilities.parse(CLIENT_CAPABILITIES).auth?.terminal, true);
 });
 
+test("a sign-in in Terminal runs in a folder of the app's own, not the home folder a program warns about", () => {
+  const script = signInScript('/opt/homebrew/bin/codebuddy', [], { cwd: "/tmp/it's here" });
+  assert.match(script, /do script "cd '\/tmp\/it'\\\\''s here' && '\/opt\/homebrew\/bin\/codebuddy'"/);
+  assert.match(signInScript('/bin/copilot', ['login']), /do script "'\/bin\/copilot' 'login'"/);
+});
+
 test('a Windows sign-in is a PowerShell script: each path whole however it is spelled, read as UTF-8', () => {
   const script = powerShellScript('Claude Code sign-in', 'C:\\Program Files\\OpenFilm\\OpenFilm.exe',
     ['C:\\Program Files\\OpenFilm\\app.asar\\src\\as-node.mjs', 'D:\\用户\\it\'s\\index.js', '--cli', 'auth', 'login', '--claudeai']);
@@ -139,6 +156,153 @@ test('on Windows, Codex is started through a script that turns the console to UT
   const blocked = join(mkdtempSync(join(tmpdir(), 'of-codex-')), 'file');
   writeFileSync(blocked, '');
   assert.deepEqual(codexLaunchEnv(exe, { win: true, dir: join(blocked, 'launch') }), { CODEX_PATH: exe });
+});
+
+test('a signed-out Cursor is said to need its sign-in at once, without the session that would open its sign-in page', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'of-cursor-'));
+  /* says it is signed out, and never answers over ACP (Cursor waits on its sign-in page there) */
+  const program = join(dir, 'cursor-agent.mjs');
+  writeFileSync(program, "if (process.argv.includes('status')) console.log('Not logged in'); else setInterval(() => {}, 1000);\n");
+  setChosenPaths({ cursor: program });
+  const session = new AgentSession({ agent: 'cursor', cwd: dir });
+  try {
+    const failed = await Promise.race([
+      session.start().then(() => null, (e) => e),
+      new Promise((done) => setTimeout(() => done(new Error('still waiting')), 15_000).unref()),
+    ]);
+    assert.equal(failed?.code, 'sign-in', failed?.message);
+  } finally {
+    session.close();
+    setChosenPaths({});
+  }
+});
+
+test("a turn an agent gave up on is said in the agent's own words, not left as an empty reply", () => {
+  /* CodeBuddy 2.168, its site out of reach: stopReason "refusal", the reason beside it */
+  const message = 'Network error: 502 安全连接建立失败 (target: https://www.codebuddy.ai)';
+  assert.equal(turnError({ stopReason: 'refusal', _meta: { 'codebuddy.ai/requestId': 'r1', 'codebuddy.ai/errorMessage': JSON.stringify({ code: -32001, message }) } }), message);
+  assert.equal(turnError({ stopReason: 'refusal', _meta: { errorMessage: 'Rate limited' } }), 'Rate limited');
+  assert.equal(turnError({ stopReason: 'refusal' }), null);
+  assert.equal(turnError({ stopReason: 'refusal', _meta: { 'codebuddy.ai/requestId': 'r1' } }), null);
+});
+
+test("CodeBuddy is started as its China edition, unless the person's shell says which edition themselves", () => {
+  assert.deepEqual(agentDefaults('codebuddy', { PATH: '/bin' }), { CODEBUDDY_INTERNET_ENVIRONMENT: 'internal' });
+  assert.deepEqual(agentDefaults('codebuddy', { CODEBUDDY_INTERNET_ENVIRONMENT: 'ioa' }), {});
+  assert.deepEqual(agentDefaults('cursor', {}), {});
+});
+
+test('a refusal about the plan is the agent\'s own words; one about the sign-in is a sign-in', () => {
+  /* Kimi 2.2 on an account without Kimi Code */
+  assert.equal(planProblem('Authentication required: 403 Your current subscription does not have access to Kimi Code right now. Upgrade your plan to keep coding with Kimi Code: https://www.kimi.com/code/#pricing'),
+    '403 Your current subscription does not have access to Kimi Code right now. Upgrade your plan to keep coding with Kimi Code: https://www.kimi.com/code/#pricing');
+  assert.equal(planProblem('Authentication required: Use Qwen Code CLI to authenticate first.'), null);
+  assert.equal(planProblem('Authentication required'), null);
+});
+
+test('a turn that ends with nothing said is said so; a refusal for the plan does not sign the agent out', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'of-kimi-'));
+  /* a Kimi that answers its first message with nothing and its second with Kimi 2.2's refusal for the plan */
+  const program = join(dir, 'kimi.mjs');
+  writeFileSync(program, `let turns = 0;
+let buf = '';
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
+    else if (m.method === 'session/new') send({ jsonrpc: '2.0', id: m.id, result: { sessionId: 's1' } });
+    else if (m.method === 'session/prompt') send(++turns === 1 ? { jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }
+      : { jsonrpc: '2.0', id: m.id, error: { code: -32000, message: 'Authentication required: 403 Your current subscription does not have access to Kimi Code right now.' } });
+  }
+});
+`);
+  setChosenPaths({ kimi: program });
+  const session = new AgentSession({ agent: 'kimi', cwd: dir });
+  try {
+    await session.start();
+    const empty = await session.prompt([{ type: 'text', text: 'hi' }]).then(() => null, (e) => e);
+    assert.equal(empty?.code, 'empty-turn');
+    const plan = await session.prompt([{ type: 'text', text: 'hi' }]).then(() => null, (e) => e);
+    assert.equal(plan?.code, 'agent-error');
+    assert.match(plan.message, /^Kimi: 403 Your current subscription/);
+  } finally {
+    session.close();
+    setChosenPaths({});
+  }
+});
+
+/** A fake agent over ACP (newline-delimited JSON-RPC), as a script: `onPrompt(m, send)` answers each message. */
+async function fakeAcpAgent(name, onPrompt) {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'of-fake-'));
+  const program = join(dir, `${name}.mjs`);
+  writeFileSync(program, `let buf = '';
+let asked = null;
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+    if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
+    else if (m.method === 'session/new') send({ jsonrpc: '2.0', id: m.id, result: { sessionId: 's1' } });
+    else (${onPrompt})(m, send);
+  }
+});
+setInterval(() => {}, 1000);
+`);
+  return { dir, program };
+}
+
+test('a turn whose agent waits on its model with nothing coming is stopped, and says why', async () => {
+  /* CodeBuddy with its connection hung: model_requesting, then nothing until it is cancelled */
+  const { dir, program } = await fakeAcpAgent('codebuddy', (m, send) => {
+    if (m.method === 'session/prompt') {
+      globalThis.asked = m.id;
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'session_info_update', _meta: { 'codebuddy.ai/agentPhase': { phase: 'model_requesting' } } } } });
+    } else if (m.method === 'session/cancel') {
+      send({ jsonrpc: '2.0', id: globalThis.asked, result: { stopReason: 'cancelled' } });
+    }
+  });
+  setChosenPaths({ codebuddy: program });
+  const session = new AgentSession({ agent: 'codebuddy', cwd: dir, stallMs: 200 });
+  try {
+    await session.start();
+    const failed = await session.prompt([{ type: 'text', text: 'hi' }]).then(() => null, (e) => e);
+    assert.equal(failed?.code, 'agent-stalled');
+    assert.match(failed.message, /^CodeBuddy heard nothing back from its model/);
+  } finally {
+    session.close();
+    setChosenPaths({});
+  }
+});
+
+test('quitting closes every agent process, one opened only to ask included; asking runs in one empty folder of the app', async () => {
+  assert.equal(probeFolder(), probeFolder());
+  const { dir, program } = await fakeAcpAgent('opencode', () => {});
+  setChosenPaths({ opencode: program });
+  const session = new AgentSession({ agent: 'opencode', cwd: dir });
+  try {
+    await session.start();
+    const gone = new Promise((done) => session.child.once('exit', done));
+    closeEverySession();
+    await gone;
+    assert.notEqual(session.child.exitCode ?? session.child.signalCode, null);
+  } finally {
+    session.close();
+    setChosenPaths({});
+  }
 });
 
 test('a Codex older than the ones tried, that did not start, is said to need an update; a later one, or a sign-in, as it was', () => {

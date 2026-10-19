@@ -16,9 +16,9 @@ export const AGENT_DOWNLOADS = Object.freeze({
   copilot: 'https://github.com/features/copilot/cli',
   cursor: 'https://cursor.com/cli',
   opencode: 'https://opencode.ai/download',
-  codebuddy: 'https://www.workbuddy.ai/docs/cli/installation',
+  codebuddy: 'https://www.codebuddy.cn/docs/cli/installation',
   qwen: 'https://github.com/QwenLM/qwen-code',
-  kimi: 'https://www.kimi.com/code',
+  kimi: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
   minimax: 'https://www.npmjs.com/package/@minimax-ai/code',
 });
 
@@ -30,7 +30,9 @@ export const AGENT_PROGRAMS = Object.freeze({
   claude: { names: ['claude'] },
   codex: { names: ['codex'] },
   copilot: { names: ['copilot'] },
-  cursor: { names: ['cursor-agent'] },
+  /* Cursor's installer names it `agent`, and `cursor-agent` as before; a program called `agent` counts only when it is
+     Cursor's (its own folder is cursor-agent), as other tools are called that too */
+  cursor: { names: ['cursor-agent', 'agent'], ours: (file, name) => name === 'cursor-agent' || inCursorFolder(file) },
   opencode: { names: ['opencode'], dirs: (home) => [join(home, '.opencode', 'bin')] },
   codebuddy: { names: ['codebuddy', 'cbc'] },
   qwen: { names: ['qwen'] },
@@ -39,6 +41,13 @@ export const AGENT_PROGRAMS = Object.freeze({
   /* MiniMax Code's own installer keeps it in ~/.minimax-code/bin */
   minimax: { names: ['mcode'], dirs: (home) => [join(home, '.minimax-code', 'bin')] },
 });
+
+/** Whether a program is the one in Cursor's own folder (…/cursor-agent/…), followed through its link. */
+export function inCursorFolder(file) {
+  let real = file;
+  try { real = realpathSync(file); } catch { /* as it is */ }
+  return /[\\/]cursor-agent[\\/]/i.test(real);
+}
 
 export function executableFile(path) {
   try { accessSync(path, constants.X_OK); return statSync(path).isFile(); } catch { return false; }
@@ -308,7 +317,15 @@ export function detectAgentInstallation(id, { home = homedir(), env = process.en
   if (picked) return { installed: true, cli: picked, source: 'chosen', install };
   const dirs = [...pathDirs, ...(program.dirs?.(home) ?? [])];
   let cli = null;
-  for (const name of program.names) if (!cli) cli = findExecutable(name, dirs, env, { win });
+  for (const name of program.names) {
+    if (cli) break;
+    if (!program.ours) { cli = findExecutable(name, dirs, env, { win }); continue; }
+    /* each folder in turn: another program by that name earlier on the PATH does not hide the agent's */
+    for (const dir of unique([...pathIn(env).split(win ? ';' : delimiter), ...dirs], win)) {
+      const file = findExecutable(name, [dir], { PATH: '' }, { win });
+      if (file && program.ours(file, name)) { cli = file; break; }
+    }
+  }
   if (cli) {
     /* Claude Code both on the PATH (an npm install that is never updated, say) and in the Claude app, which keeps its
        own up to date: the later one, whose models are the current ones. One whose version can't be told stays. */
