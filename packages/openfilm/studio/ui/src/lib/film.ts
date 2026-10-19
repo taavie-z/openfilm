@@ -2,6 +2,7 @@
  * film.html as the editor sees it: the format's own helpers (src/film-doc.mjs, shared with the CLI) and the few the
  * editor adds — Studio's track kinds and badges, clip locations, volume in dB.
  */
+import { rowBadges, trackKind } from '../../../server/track-layout.mjs';
 import { DEFAULT_STAGE, SPEED_MAX, SPEED_MIN, clipKind, isPage, isStill, kindOf, soundRole } from '../../../../src/film-doc.mjs';
 import type { FilmBox, FilmClip, FilmClipKind as FilmSrcKind, FilmDoc, FilmOverride, FilmTrack } from '../../../../src/film-doc.d.mts';
 
@@ -28,11 +29,7 @@ export function filmClipKind(of: string | { src: string; sound?: boolean }): Fil
 }
 
 /** How Studio shows a track, from what is on it: all sound → audio, all pages → mg, anything else → video. */
-export function filmTrackKind(track: { clips: readonly { src: string; sound?: boolean }[] }): FilmClipKind {
-  const kinds = new Set(track.clips.map((clip) => filmClipKind(clip)));
-  if (kinds.size === 1) return [...kinds][0]!;
-  return 'video';
-}
+export const filmTrackKind = trackKind;
 
 /** A file's name without its folder or extension (`assets/intro.html` → `intro`). */
 export function fileStem(path: string): string {
@@ -52,15 +49,7 @@ export function filmTrackPrefix(kind: string): string {
  * the position itself.
  */
 export function filmTrackBadges(tracks: readonly ({ kind: string } | { clips: readonly { src: string }[] })[]): string[] {
-  const prefixes = tracks.map((track) => filmTrackPrefix('kind' in track ? track.kind : filmTrackKind(track)));
-  const total = new Map<string, number>();
-  for (const p of prefixes) total.set(p, (total.get(p) ?? 0) + 1);
-  const seen = new Map<string, number>();
-  return prefixes.map((prefix) => {
-    const nth = (seen.get(prefix) ?? 0) + 1;
-    seen.set(prefix, nth);
-    return `${prefix}${prefix === 'A' ? nth : total.get(prefix)! - nth + 1}`;
-  });
+  return rowBadges(tracks.map((track) => 'kind' in track ? track.kind : filmTrackKind(track)));
 }
 
 /** A sound's role in the mix, from where it lives (generated sounds are filed by kind; anything else is a voice). */

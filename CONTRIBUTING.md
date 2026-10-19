@@ -173,6 +173,12 @@ maintainer reviews every pull request, and may ask for changes. It is squash-mer
 commit's: name the part and the change, as the history does (`Studio: …`, `CLI: …`, `Desktop: …`). Add a changeset
 when the change ships (above, Releases).
 
+## Editing-project formats
+
+Editing-project formats share a timeline planner and media pipeline. See the [adapter contract](packages/openfilm/studio/server/NLE.md)
+for the existing intermediate structures, format registration and regression checks. A new format implements its
+serializer; it does not duplicate rendering, transcoding, copying or export-job management.
+
 ## License
 
 What you contribute is under the [MIT license](LICENSE), like the rest of the code. There is no agreement to sign.
