@@ -60,9 +60,10 @@ import { FilmPage, launch } from '../../src/host.mjs';
 import { filmSound, kill as killProcess, mix, open } from '../../src/shared.mjs';
 import { FILM_FILE, clipFade, filmHtml, fittedFade, kindOf, pictureRect, readFilmFile } from '../../src/film-doc.mjs';
 import { layerBlocks, rowBadges, trackKind } from './track-layout.mjs';
-import { fcpxmlDocument } from './fcpxml.mjs';
-import { NLE_FPS, nleFps, planNleTimeline, probeSource, soundStem, xmemlDocument } from './nle.mjs';
-import { draftsRoot, jianyingDraft } from './jianying.mjs';
+import { NLE_FORMATS, nleFormat, checkedNleDocuments } from './nle-formats.mjs';
+import { nleAudioArgs } from './nle-media.mjs';
+import { NLE_FPS, nleFps, planNleTimeline, probeSource, soundStem } from './nle.mjs';
+import { draftsRoot } from './jianying.mjs';
 import { slidesPdf, writePptx } from './slides.mjs';
 import { subtitlesForExport } from './captions.mjs';
 import { filmSubtitleCuesInRange, filmSubtitleShown, filmSubtitleSrt, filmSubtitleTranscript, filmSubtitleVtt } from './film-subtitle.mjs';
@@ -87,7 +88,7 @@ export { exportsRoot };
  * @typedef {Framing & { kind: 'poster', format?: 'png' | 'jpg', shortEdge?: number, at?: number }} PosterAsk
  * @typedef {{ kind: 'subtitles', format?: 'srt' | 'vtt' | 'txt' }} SubtitlesAsk
  * @typedef {Framing & { kind: 'slides', format?: 'pptx' | 'pdf', shortEdge?: number, at?: number[] }} SlidesAsk
- * @typedef {{ kind: 'nle', format?: 'xml' | 'fcpxml' | 'jianying' | 'capcut', fps?: number, audio?: 'clips' | 'stems', media?: 'copy' | 'link', subtitles?: boolean }} NleAsk
+ * @typedef {{ kind: 'nle', format?: keyof typeof NLE_FORMATS, fps?: number, audio?: 'clips' | 'stems', media?: 'copy' | 'link', subtitles?: boolean }} NleAsk
  * @typedef {{ kind: 'project', parts?: ProjectPart[], as?: 'zip' | 'folder' }} ProjectAsk
  * @typedef {typeof PROJECT_PARTS[number]} ProjectPart
  * @typedef {VideoAsk | GifAsk | AudioAsk | StillsAsk | PosterAsk | SubtitlesAsk | SlidesAsk | NleAsk | ProjectAsk} ExportSpec
@@ -245,9 +246,7 @@ function baseName(project, ask) {
     }
     case 'stills': return `${base} stills`;
     case 'poster': return `${base} poster`;
-    case 'nle':
-      if (ask.format === 'fcpxml') return `${base} · Final Cut Pro`;
-      return ask.format === 'jianying' || ask.format === 'capcut' ? base : `${base} · Editor XML`;
+    case 'nle': return `${base}${nleFormat(ask.format)?.folderSuffix ?? ''}`;
     default: return `${base}${range}`;
   }
 }
@@ -307,7 +306,7 @@ function checked(/** @type {ExportAsk} */ ask) {
       break;
     case 'nle':
       if (ask.range !== undefined) throw new ExportError('an editor gets the whole timeline: no range');
-      if (ask.format !== undefined && !['xml', 'fcpxml', 'jianying', 'capcut'].includes(ask.format)) throw new ExportError('format: xml, fcpxml, jianying or capcut');
+      if (!nleFormat(ask.format)) throw new ExportError(`format: ${Object.keys(NLE_FORMATS).join(', ')}`);
       if (!between(ask.fps, 1, 120)) throw new ExportError(`fps: ${NLE_FPS.join(', ')}`);
       if (ask.audio !== undefined && ask.audio !== 'clips' && ask.audio !== 'stems') throw new ExportError('audio: clips or stems');
       if (ask.media !== undefined && ask.media !== 'copy' && ask.media !== 'link') throw new ExportError('media: copy or link');
@@ -683,26 +682,26 @@ function tempo(speed) {
 }
 
 /**
- * A source an editor can't read, made into one it can: video → ProRes (4444 with its alpha, else 422 HQ), sound →
- * 48 kHz WAV (`segment`: only those source seconds, at that speed, exactly `seconds` long).
+ * A source converted using its adapter's encoding profile (`segment`: only those source seconds, at that speed,
+ * exactly `seconds` long). The profile also determines the file extension and metadata in the plan.
  * @param {Extract<import('./nle.mjs').NleMediaJob, { kind: 'transcode' }>} make @param {string} out @param {AbortSignal} signal
  */
 async function transcode(make, out, signal) {
-  if (make.to === 'wav') {
+  const encoding = make.encoding;
+  if (encoding.kind === 'audio') {
     const seg = make.segment;
     /* the part is cut from the source before its speed changes, as the film's mix cuts it (after the -i, -ss and -t
        would count the seconds coming out, slowed or sped); then padded with silence or trimmed to its clip's length,
        so the file ends where its clip does */
     await run([...(seg ? ['-ss', String(seg.from), '-t', String(seg.to - seg.from)] : []), '-vn', '-i', make.from,
       ...(seg ? ['-af', `asetpts=PTS-STARTPTS,${tempo(seg.speed)},apad=whole_dur=${seg.seconds},atrim=0:${seg.seconds}`] : []),
-      '-c:a', 'pcm_s16le', '-ar', '48000', out], signal);
+      ...nleAudioArgs(encoding), out], signal);
     return;
   }
-  const alpha = make.to === 'prores4444';
-  const tail = ['-map', '0:v:0', '-map', '0:a?', '-c:v', 'prores_ks', '-profile:v', alpha ? '4444' : '3', '-vendor', 'apl0',
-    '-pix_fmt', alpha ? 'yuva444p10le' : 'yuv422p10le', '-c:a', 'pcm_s16le', '-ar', '48000', out];
+  const tail = ['-map', '0:v:0', '-map', '0:a?', '-c:v', encoding.codec, ...encoding.args,
+    '-pix_fmt', encoding.pixelFormat, ...nleAudioArgs(encoding.audio), out];
   /* VP9's alpha is a side channel ffmpeg's own decoder drops: libvpx reads it */
-  if (alpha) {
+  if (encoding.alpha) {
     try { await run(['-c:v', 'libvpx-vp9', '-i', make.from, ...tail], signal); return; } catch (e) { if (signal.aborted) throw e; }
   }
   await run(['-i', make.from, ...tail], signal);
@@ -1072,21 +1071,22 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
    */
   async function exportNle(job, root, out, signal) {
     const ask = /** @type {NleAsk} */ (job.ask);
-    const fcp = ask.format === 'fcpxml';
-    const app = ask.format === 'jianying' || ask.format === 'capcut' ? ask.format : null;
+    const format = nleFormat(ask.format);
+    if (!format) throw new ExportError('unknown editing-project format');
+    const app = format.draftApp;
     /* a draft goes where its app lists its drafts, when the app is on this computer */
     const dir = (app && drafts(app)) || out;
     const fps = nleFps(ask.fps ?? 30);
     const mode = ask.audio ?? 'clips';
     const title = safeName(job.name);
-    update(job, { encoder: 'prores_ks' });
+    update(job, { encoder: format.mediaPolicy.alphaVideo.codec });
     /* the edit with every track shown: a hidden track comes over disabled, one click from back on, so it is drawn too */
     const doc = existsSync(join(root, FILM_FILE)) ? filmDoc(root)
       : { stage: await stageOf(root), tracks: [{ clips: [{ src: 'index.html', id: title }] }] };
     /* a source out of the project fails the export before anything is drawn */
     for (const track of doc.tracks) for (const row of track.clips) clipPath(root, row.src);
     const { cues } = ask.subtitles === false ? { cues: [] } : await subtitlesOf(root).catch((error) => {
-      if (fcp) throw error;
+      if (format.strictSubtitles) throw error;
       return { cues: [] };
     });
     const scratch = join(root, '.film', 'cache', 'export', `nle-${randomBytes(4).toString('hex')}`);
@@ -1109,7 +1109,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
       if (signal.aborted) throw new Error('cancelled');
       const byId = new Map(loaded.map((c) => [c.id, c]));
 
-      const rows = ask.format === 'fcpxml' ? doc.tracks.flatMap((track) => {
+      const rows = format.audioTracks === 'source' ? doc.tracks.flatMap((track) => {
         const blocks = track.clips.flatMap((clip) => {
           const c = byId.get(clip.id);
           return c ? [{ id: clip.id, startMs: Math.round(c.at * 1000), endMs: Math.round(c.end * 1000) }] : [];
@@ -1174,17 +1174,17 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
           const part = sounds.filter((x) => x.enabled && x.role === role);
           if (!part.length) continue;
           if (signal.aborted) throw new Error('cancelled');
-          const file = join(scratch, `${role}.wav`);
+          const file = join(scratch, `${role}.${format.mediaPolicy.audio.extension}`);
           await mix(part.map((x) => ({ file: x.path, at: x.at, from: x.from, to: x.to, volume: x.volume, speed: x.speed,
             ...(x.fade ? { fade: { in: x.fade[0], out: x.fade[1], length: (x.to - x.from) / x.speed, skip: 0 } } : {}) })),
-            duration || 0.001, file, SOUND_CODECS.wav);
+            duration || 0.001, file, nleAudioArgs(format.mediaPolicy.audio));
           stems.set(role, file);
         }
       }
 
       const timeline = planNleTimeline({ stage: doc.stage, duration: duration || 0.001, pictures, sounds },
         { title, fps, audio: mode, media: ask.media ?? 'copy', mediaDir: join(final, 'media'), stems: [...stems.keys()],
-          audioTracks: fcp ? 'source' : 'roles' });
+          audioTracks: format.audioTracks, mediaPolicy: format.mediaPolicy });
       const staged = (/** @type {import('./nle.mjs').NleFile} */ f) => join(staging, 'media', basename(f.path));
 
       /* each web page (and each picture Basic Motion can't place) drawn alone, full frame, with alpha */
@@ -1194,7 +1194,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
       let framesBefore = 0;
       for (const file of renders) {
         if (file.job.kind !== 'render') continue;
-        const { clip: id, frames } = file.job;
+        const { clip: id, frames, encoding } = file.job;
         const p = /** @type {import('./nle.mjs').NlePicture} */ (pictures.find((x) => x.id === id));
         const native = byId.get(id)?.native ?? Infinity;
         /* as long as its frames on the sequence: a page holds its last frame, a still lasts as long as it is told */
@@ -1204,6 +1204,7 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
         try {
           await render([one.dir], {
             root, alpha: true, silent: true, fps: timeline.rate.fps, out: staged(file), signal,
+            format: { video: ['-c:v', encoding.codec, ...encoding.args], pix: `format=${encoding.pixelFormat}`, audio: nleAudioArgs(encoding.audio), tag: [] },
             onProgress: (/** @type {number} */ done) => tick(offset + done, totalFrames),
           });
         } finally {
@@ -1241,25 +1242,14 @@ export function createExports({ onChange = () => {}, captions = subtitlesForExpo
       }
 
       update(job, { phase: 'finishing', progress: 0.98 });
-      if (app) {
-        /* the app on Windows reads draft_content.json, on a Mac draft_info.json: the same draft in both */
-        const draft = jianyingDraft(timeline, { app, name: basename(final), folder: final, root: dir, cues });
-        const info = JSON.stringify(draft.info);
-        await writeFile(join(staging, 'draft_info.json'), info, 'utf8');
-        await writeFile(join(staging, 'draft_content.json'), info, 'utf8');
-        await writeFile(join(staging, 'draft_meta_info.json'), JSON.stringify(draft.meta), 'utf8');
-      } else {
-        const srt = filmSubtitleSrt(cues);
-        if (srt) await writeFile(join(staging, `${title}.srt`), srt, 'utf8');
-        const xml = fcp ? fcpxmlDocument(timeline, { cues }) : xmemlDocument(timeline);
-        await writeFile(join(staging, `${title}.${fcp ? 'fcpxml' : 'xml'}`), xml, 'utf8');
-      }
+      const documents = checkedNleDocuments(format.serialize(timeline, { title, folder: final, root: dir, cues }));
+      for (const document of documents) await writeFile(join(staging, document.name), document.text, 'utf8');
       if (signal.aborted) throw new Error('cancelled');
       if (!(await readdir(join(staging, 'media'))).length) await rmdir(join(staging, 'media'));
       await rename(staging, final);
       const media = existsSync(join(final, 'media')) ? (await readdir(join(final, 'media'))).sort().map((n) => join(final, 'media', n)) : [];
-      const first = app ? 'draft_info.json' : fcp ? '.fcpxml' : '.xml';
-      const top = (await readdir(final)).filter((n) => n !== 'media').sort((a, b) => Number(!a.endsWith(first)) - Number(!b.endsWith(first)) || a.localeCompare(b));
+      const first = documents[0].name;
+      const top = (await readdir(final)).filter((n) => n !== 'media').sort((a, b) => Number(a !== first) - Number(b !== first) || a.localeCompare(b));
       /* the XML (the draft) first: "Show in Finder" shows the first */
       const outputs = [...top.map((n) => join(final, n)), ...media];
       update(job, { out: outputs[0], outputs });

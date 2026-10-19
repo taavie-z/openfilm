@@ -1,13 +1,16 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createExports, exportCapabilities, exportsRoot, ExportError, frameBox, dimsForShortEdge, hardwareEncoder, hardwareOptions, projectFiles, projectSizes } from './exports.mjs';
-import { allocateLanes, containMotion, fadeKeyframes, frameSpan, nleRate, planNleTimeline, xmemlDocument } from './nle.mjs';
+import { allocateLanes, containMotion, fadeKeyframes, frameSpan, nleRate, planNleTimeline } from './nle.mjs';
+import { xmemlDocument } from './xmeml.mjs';
+import { NLE_MEDIA_POLICY } from './nle-media.mjs';
 import { fcpxmlDocument } from './fcpxml.mjs';
+import { NLE_FORMATS } from './nle-formats.mjs';
 import { pptxParts } from './slides.mjs';
 import { filmSubtitleSrt, parseFilmSubtitleStyle } from './film-subtitle.mjs';
 import { zipFiles } from './zip.mjs';
@@ -422,10 +425,10 @@ test('fades in the editor\'s timeline: a picture that fades is rendered; a sound
     stage: { w: 320, h: 180 }, duration: 4,
     pictures: [{ id: 'shot', kind: 'video', src: 'a.mp4', path: '/p/a.mp4', at: 0, end: 4, from: 2, speed: 1, track: 0, hidden: false, faded: true, facts }],
     sounds: [{ id: 'shot', src: 'a.mp4', path: '/p/a.mp4', at: 0, from: 2, to: 6, speed: 1, volume: 1, enabled: true, role: 'footage', picture: 'shot', facts, fade: [0.5, 0] }],
-  }, { title: 'T', fps: 25, audio: 'clips', media: 'copy', mediaDir: '/out/media' });
+  }, { mediaPolicy: NLE_MEDIA_POLICY, title: 'T', fps: 25, audio: 'clips', media: 'copy', mediaDir: '/out/media' });
   assert.equal(timeline.files.find((f) => f.id === timeline.video[0].clips[0].fileId)?.job.kind, 'render', 'the picture rendered, its fade in its alpha');
   const sound = timeline.audio[0].clips[0];
-  assert.deepEqual(timeline.files.find((f) => f.id === sound.fileId)?.job, { kind: 'transcode', from: '/p/a.mp4', to: 'wav', segment: { from: 2, to: 6, speed: 1, seconds: 4 } });
+  assert.deepEqual(timeline.files.find((f) => f.id === sound.fileId)?.job, { kind: 'transcode', from: '/p/a.mp4', encoding: NLE_MEDIA_POLICY.audio, segment: { from: 2, to: 6, speed: 1, seconds: 4 } });
   assert.equal(sound.in, 0);
   assert.deepEqual(sound.levels, [{ when: 0, value: 0 }, { when: 13, value: 1 }]);
   assert.match(xmemlDocument(timeline), /<parameterid>level<\/parameterid>[\s\S]*<keyframe>\s*<when>0<\/when>\s*<value>0<\/value>\s*<\/keyframe>\s*<keyframe>\s*<when>13<\/when>/);
@@ -439,7 +442,7 @@ test('Final Cut Pro keeps source audio rows when an effect overlaps adjacent nar
     sound('story-01-1', 1, 0.4, 4.98), sound('story-01-2', 1, 5.5683, 5.82),
     sound('game-sfx-1', 2, 5.4, 0.333), sound('adventure-music', 3, 0, 120),
   ] };
-  const opts = { title: 'Source tracks', fps: 60, audio: 'clips', media: 'copy', mediaDir: scratch };
+  const opts = { mediaPolicy: NLE_MEDIA_POLICY, title: 'Source tracks', fps: 60, audio: 'clips', media: 'copy', mediaDir: scratch };
   const timeline = planNleTimeline(film, { ...opts, audioTracks: 'source' });
   assert.deepEqual(timeline.audio.map((t) => t.clips.map((c) => c.name)), [
     ['story-01-1', 'story-01-2'], ['game-sfx-1'], ['adventure-music'],
@@ -472,7 +475,7 @@ test('Final Cut Pro footage audio follows its own picture, including reused sour
   sounds.push({ ...sounds[2], id: 'independent', picture: undefined, track: 2, enabled: true });
   const plans = [25, 29.97].map((fps) => planNleTimeline({
     stage: { w: 320, h: 180 }, duration: 8, pictures, sounds,
-  }, { title: 'Linked footage', fps, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' }));
+  }, { mediaPolicy: NLE_MEDIA_POLICY, title: 'Linked footage', fps, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' }));
   const parsed = await parseXml(plans.map((plan) => fcpxmlDocument(plan)), (doc) => {
     const seconds = (value) => {
       const [n, d = '1'] = (value ?? '0s').replace(/s$/, '').split('/');
@@ -520,7 +523,7 @@ test('Final Cut Pro keeps original audio paired when its picture is rendered', a
       at: 1, end: 3, from: 2, speed, track: 0, hidden: false, styled: true, facts };
     const plan = planNleTimeline({ stage: { w: 320, h: 180 }, duration: 4, pictures: [picture],
       sounds: [{ ...picture, picture: picture.id, to: 2 + 2 * speed, volume: 0.5, enabled: true, role: 'footage' }],
-    }, { title: 'Rendered footage', fps: 25, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' });
+    }, { mediaPolicy: NLE_MEDIA_POLICY, title: 'Rendered footage', fps: 25, audio: 'clips', media: 'copy', mediaDir: scratch, audioTracks: 'source' });
     return fcpxmlDocument(plan);
   });
   for (const { error, found } of await parseXml(documents, (doc) => {
@@ -643,6 +646,101 @@ test('Final Cut Pro connections retain their parent and sequence positions acros
     assert.equal(parents[caption.name], 'second');
     assert.equal(parents[gapCaption.name], 'OpenFilm');
   }
+});
+
+test('a new format reuses the media pipeline, entry ordering and failure cleanup', ffmpeg, async () => {
+  const destination = join(scratch, 'Adapter');
+  mkdirSync(destination);
+  const adapterRoot = join(scratch, 'Adapter project');
+  mkdirSync(adapterRoot);
+  copyFileSync(join(root, 'badge.html'), join(adapterRoot, 'title.html'));
+  copyFileSync(join(root, 'assets/tone.wav'), join(adapterRoot, 'tone.wav'));
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=25:duration=1',
+    '-c:v', 'libvpx-vp9', join(adapterRoot, 'shot.webm')]);
+  writeFileSync(join(adapterRoot, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [
+    { clips: [{ src: 'title.html', id: 'title' }] },
+    { clips: [{ src: 'shot.webm', id: 'shot' }] },
+    { clips: [{ src: 'tone.wav', id: 'tone' }] },
+  ] }));
+  NLE_FORMATS.contract = {
+    ...NLE_FORMATS.xml, folderSuffix: ' · Contract',
+    mediaPolicy: { ...NLE_MEDIA_POLICY, audioCopy: new Set(),
+      video: { ...NLE_MEDIA_POLICY.video, extension: 'mp4', codec: 'libx264', args: ['-crf', '18'], pixelFormat: 'yuv420p' },
+      alphaVideo: { ...NLE_MEDIA_POLICY.alphaVideo, extension: 'webm', codec: 'libvpx-vp9', args: ['-b:v', '0', '-crf', '20'], pixelFormat: 'yuva420p' },
+      audio: { kind: 'audio', extension: 'aiff', codec: 'pcm_s24be', args: [], sampleRate: 44_100 } },
+    serialize(timeline, options) {
+      assert.equal(timeline.rate.fps, 25);
+      assert.equal(timeline.files.some((f) => (f.job.kind === 'transcode' || f.job.kind === 'stem') && f.job.encoding.kind === 'audio' && f.job.encoding.extension === 'aiff'), true, 'adapter audio policy reaches the media pipeline');
+      assert.equal(timeline.files.some((f) => f.job.kind === 'render'), true);
+      assert.equal(options.root, destination);
+      assert.equal(options.folder.includes('.partial-'), false);
+      return [
+        { name: 'z.project.json', text: JSON.stringify({ timeline, cues: options.cues }) },
+        { name: 'a.sidecar.json', text: '{}' },
+      ];
+    },
+  };
+  try {
+    const exports = createExports({ captions: subtitles });
+    const ask = { kind: 'nle', format: 'contract', fps: 25 };
+    const done = await ended(exports, exports.start(project('Tiny', adapterRoot), ask, { folder: destination }));
+    assert.equal(done.status, 'done', done.error);
+    assert.equal(basename(done.out), 'z.project.json', 'entry point precedes an alphabetically earlier sidecar');
+    assert.equal(basename(dirname(done.out)), 'Tiny · Contract');
+    assert.deepEqual(done.outputs.slice(0, 2).map((p) => basename(p)), ['z.project.json', 'a.sidecar.json']);
+    const { timeline, cues } = JSON.parse(readFileSync(done.out, 'utf8'));
+    assert.equal(timeline.durationFrames, 25);
+    assert.equal(cues.length, 2);
+    assert.equal(done.encoder, 'libvpx-vp9');
+    const verifyAudio = (file) => {
+      assert.equal(file.audio.sampleRate, 44_100);
+      const actual = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name,sample_rate', '-of', 'json', file.path]).toString()).streams[0];
+      assert.deepEqual(actual, { codec_name: 'pcm_s24be', sample_rate: '44100' });
+    };
+    for (const file of timeline.files) {
+      assert.ok(existsSync(file.path), file.path);
+      if (file.audio) verifyAudio(file);
+      if (file.video) {
+        const expected = file.job.kind === 'render' ? 'vp9' : 'h264';
+        const actual = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+          '-show_entries', 'stream=codec_name:stream_tags=alpha_mode', '-of', 'json', file.path]).toString()).streams[0];
+        assert.equal(actual.codec_name, expected);
+        assert.equal(file.path.endsWith(file.job.kind === 'render' ? '.webm' : '.mp4'), true);
+        if (file.job.kind === 'render') {
+          assert.equal(Object.entries(actual.tags).some(([key, value]) => key.toLowerCase() === 'alpha_mode' && value === '1'), true);
+          const alpha = execFileSync('ffmpeg', ['-v', 'error', '-c:v', 'libvpx-vp9', '-i', file.path,
+            '-vf', 'alphaextract', '-frames:v', '1', '-f', 'rawvideo', '-']);
+          assert.equal(alpha.includes(0), true, 'rendered VP9 retains transparent pixels');
+          assert.equal(alpha.includes(255), true, 'rendered VP9 retains opaque pixels');
+        }
+      }
+    }
+    const stemDone = await ended(exports, exports.start(project('Stems', adapterRoot), { ...ask, audio: 'stems' }, { folder: destination }));
+    assert.equal(stemDone.status, 'done', stemDone.error);
+    const stemTimeline = JSON.parse(readFileSync(stemDone.out, 'utf8')).timeline;
+    const stem = stemTimeline.files.find((f) => f.job.kind === 'stem');
+    assert.ok(stem.path.endsWith('.aiff'));
+    verifyAudio(stem);
+    for (const result of ['throws', 'empty', 'traversal', 'duplicate', 'media']) {
+      NLE_FORMATS.contract.serialize = () => {
+        if (result === 'throws') throw new Error('broken serializer');
+        if (result === 'empty') return [];
+        if (result === 'traversal') return [{ name: '../escaped.json', text: '{}' }];
+        if (result === 'duplicate') return [{ name: 'Film.xml', text: 'first' }, { name: 'film.XML', text: 'second' }];
+        return [{ name: 'media', text: '{}' }];
+      };
+      const failed = await ended(exports, exports.start(project(result, adapterRoot), ask, { folder: destination }));
+      assert.equal(failed.status, 'failed');
+      assert.match(failed.error, result === 'throws' ? /broken serializer/ : result === 'empty' ? /no entry document/ : result === 'duplicate' ? /duplicate.*document name/ : /invalid.*document name/);
+      assert.equal(existsSync(join(destination, 'escaped.json')), false);
+      assert.equal(existsSync(join(destination, `${result} · Contract`)), false);
+      assert.equal(readdirSync(destination).some((n) => n.includes('.partial-')), false);
+    }
+    for (const format of ['__proto__', 'toString', 'unknown']) {
+      assert.throws(() => exports.start(project(), { kind: 'nle', format }), ExportError);
+    }
+  } finally { delete NLE_FORMATS.contract; }
 });
 
 test('Final Cut Pro export packages FCPXML, rendered pages, audio and optional subtitle sidecars', ffmpeg, async () => {

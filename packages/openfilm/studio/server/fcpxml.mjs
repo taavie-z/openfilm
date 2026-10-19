@@ -1,6 +1,7 @@
 // @ts-check
 import { pathToFileURL } from 'node:url';
-import { frameSpan, nleRate, xmlEscape } from './nle.mjs';
+import { frameSpan, nleRate } from './nle.mjs';
+import { xmlEscape } from './nle-xml.mjs';
 import { filmSubtitleCuesInRange, filmSubtitleSequence, filmSubtitleText } from './film-subtitle.mjs';
 
 const STEM_ROLES = { voice: 'dialogue.Voice', footage: 'dialogue.Footage', sfx: 'effects', music: 'music' };
