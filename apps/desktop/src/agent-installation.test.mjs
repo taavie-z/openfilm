@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_INSTALLERS, chosenProgram, claudeAppCli, claudeVersion, cmdTarget, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, findExecutable, installCommand, laterVersion, notTheAgent, opencodeVersion, searchReport, windowsBinDirs } from './agent-installation.mjs';
+import { AGENT_INSTALLERS, chosenProgram, claudeAppCli, codexAppCopies, claudeVersion, cmdTarget, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, findExecutable, installCommand, laterVersion, notTheAgent, opencodeVersion, searchReport, windowsBinDirs } from './agent-installation.mjs';
 
 test("an npm .cmd shim (Windows) runs its package's script: that is what gets started", () => {
   const npm = mkdtempSync(join(tmpdir(), 'of-npm-'));
@@ -443,4 +443,22 @@ test('the report says which file is not the agent, and why', () => {
   assert.equal(report.files.length, 1);
   assert.equal(report.files[0].refused, 'app');
   assert.equal(report.files[0].usable, false);
+});
+
+test("Codex on Windows: never the copy in the Store app's own folder, which Windows won't start; the copy the Codex app starts", () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const store = put(join(home, 'Program Files', 'WindowsApps', 'OpenAI.Codex_26.1002.7124.0_x64__2p2nqsd0c76g0', 'app', 'resources', 'codex.exe'));
+  assert.equal(notTheAgent('codex', store, { win: true }), 'app');
+  assert.equal(notTheAgent('codex', store, { chosen: store, win: true }), 'app');
+  /* a Store app's command is not in its folder, and starts */
+  assert.equal(notTheAgent('codex', join(home, 'AppData', 'Local', 'Microsoft', 'WindowsApps', 'codex.exe'), { win: true }), null);
+  const none = { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [], win: true, codexVersionOf: () => null };
+  assert.equal(detectAgentInstallation('codex', { ...none, others: [store] }).cli, null);
+  const bin = join(home, 'AppData', 'Local', 'OpenAI', 'Codex', 'bin');
+  const old = put(join(bin, '5d35d2790d1d3d7b', 'codex.exe'));
+  const recent = put(join(bin, '247581e40ee272fb', 'codex.exe'));
+  utimesSync(old, new Date(2026, 9, 1), new Date(2026, 9, 1));
+  assert.deepEqual(codexAppCopies(home), [recent, old]);
+  assert.deepEqual(detectAgentInstallation('codex', { ...none, others: [store] }), { installed: true, cli: recent, source: 'app', install: detectAgentInstallation('codex', none).install });
 });

@@ -60,8 +60,16 @@ const LAUNCHERS = [
 ];
 
 /**
+ * A Microsoft Store app's own folder (C:\Program Files\WindowsApps\<name>_<version>_<arch>__<publisher>\…): Windows
+ * lets no other program start what is in it ("Access is denied"). Its commands (…\Microsoft\WindowsApps\<name>.exe)
+ * are elsewhere and start.
+ */
+const STORE_PACKAGE = /[\\/]WindowsApps[\\/][^\\/]+_[^\\/]*__[0-9a-z]+[\\/]/i;
+
+/**
  * Why a program found or chosen for an agent is not the agent, or null: `app`, an editor's or a desktop app's own
- * launcher (on Windows, a window program too); `not-cursor-agent`, one for Cursor outside Cursor's own folder.
+ * launcher (on Windows, a window program too, and anything inside a Store app's own folder); `not-cursor-agent`, one
+ * for Cursor outside Cursor's own folder.
  * `chosen`: what the person chose, when `file` is what it runs.
  * @returns {'app' | 'not-cursor-agent' | null}
  */
@@ -69,6 +77,7 @@ export function notTheAgent(id, file, { chosen = null, win = windows } = {}) {
   const real = (p) => { try { return realpathSync(p); } catch { return p; } };
   const paths = [file, real(file), ...(chosen ? [chosen, real(chosen)] : [])];
   if (paths.some((p) => LAUNCHERS.some((re) => re.test(p)))) return 'app';
+  if ([file, chosen].some((p) => p && STORE_PACKAGE.test(p))) return 'app';
   if (win && /\.exe$/i.test(file) && exeSubsystem(real(file)) === WINDOW_SUBSYSTEM) return 'app';
   if (id === 'cursor' && !inCursorFolder(file)) return 'not-cursor-agent';
   return null;
@@ -358,6 +367,17 @@ function codexInApps(/** @type {string[]} */ applicationDirs) {
   return applicationDirs.flatMap((dir) => ['Codex.app', 'ChatGPT.app'].flatMap((app) => CODEX_IN_APP.map((p) => join(dir, app, p)))).filter(executableFile);
 }
 
+/**
+ * The copies of Codex the Codex app for Windows starts: it can't start the one in its Store folder either, so it keeps
+ * one in %LOCALAPPDATA%\OpenAI\Codex\bin, in a folder per build (`bin\<build>\codex.exe`). The latest written first.
+ */
+export function codexAppCopies(home = homedir()) {
+  const bin = join(localAppData(home), 'OpenAI', 'Codex', 'bin');
+  const at = (file) => { try { return statSync(file).isFile() ? statSync(file).mtimeMs : -1; } catch { return -1; } };
+  return [...folders(bin, /./).map((dir) => join(dir, 'codex.exe')), join(bin, 'codex.exe')]
+    .map((file) => ({ file, time: at(file) })).filter((c) => c.time >= 0).sort((a, b) => b.time - a.time).map((c) => c.file);
+}
+
 /* where OpenCode is inside OpenCode.app, its desktop app (macOS) */
 const OPENCODE_IN_APP = 'Contents/Resources/opencode-cli';
 
@@ -415,8 +435,9 @@ export function detectAgentInstallation(id, { home = homedir(), env = process.en
     }
   }
   const usable = (file) => (win ? presentFile(file) : executableFile(file));
-  /* copies kept up to date by the maker's app (Codex: or a Store app), and how their version is told */
-  const copies = id === 'codex' ? [...codexInApps(applicationDirs), ...others.filter(usable)] : id === 'opencode' ? opencodeInApps(applicationDirs) : [];
+  /* copies kept up to date by the maker's app (Codex: the Mac apps', or the one the Windows app starts), and how their
+     version is told */
+  const copies = id === 'codex' ? [...codexInApps(applicationDirs), ...(win ? codexAppCopies(home) : []), ...others.filter((f) => usable(f) && !notTheAgent(id, f, { win }))] : id === 'opencode' ? opencodeInApps(applicationDirs) : [];
   const versionOf = id === 'opencode' ? opencodeVersionOf : codexVersionOf;
   if (cli) {
     /* Claude Code both on the PATH (an npm install that is never updated, say) and in the Claude app, which keeps its
@@ -436,7 +457,7 @@ export function detectAgentInstallation(id, { home = homedir(), env = process.en
   }
   cli = copies[0] ?? null;
   if (!cli && id === 'claude') cli = claudeAppCli(home, { win });
-  if (!cli) cli = others.find(usable) ?? null;
+  if (!cli) cli = others.find((f) => usable(f) && !notTheAgent(id, f, { win })) ?? null;
   return { installed: Boolean(cli), cli, source: cli ? 'app' : null, install };
 }
 

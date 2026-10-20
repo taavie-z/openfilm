@@ -33,7 +33,7 @@ import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { PATH_SEP, childEnvironment, lastPathSource, loginShellEnvironment, loginShellVariables, shellSubset } from './environment.mjs';
-import { AGENT_PROGRAMS, HOME_BIN_CANDIDATES, chosenProgram, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, installCommand, laterVersion, notTheAgent, searchReport } from './agent-installation.mjs';
+import { AGENT_PROGRAMS, HOME_BIN_CANDIDATES, chosenProgram, codexAppCopies, codexVersion, desktopApp, detectAgentInstallation, installCommand, laterVersion, notTheAgent, searchReport } from './agent-installation.mjs';
 import { logSwitches } from './agent-logs.mjs';
 import { mergeConfig, sessionSkills } from './agent-skills.mjs';
 import { nodeBinary } from './node-runtime.mjs';
@@ -189,32 +189,23 @@ export function codexLaunchEnv(/** @type {string} */ path, { win = windows, dir 
     return { CODEX_PATH: path };
   }
 }
-/** what the slower search found last (Windows): npm's global folder, Codex inside a Microsoft Store app */
-let slowFound = { npmPrefix: null, storeCodex: null };
+/** what the slower search found last (Windows): npm's global folder */
+let slowFound = { npmPrefix: null };
 let slowCache = null;
 const SLOW_FOR_MS = 10 * 60_000;
-/* an OpenAI app from the Microsoft Store (ChatGPT, Codex) that carries Codex: where its codex.exe is */
-const STORE_CODEX = "Get-AppxPackage -Name 'OpenAI.*' | ForEach-Object { Get-ChildItem -LiteralPath $_.InstallLocation -Recurse -Depth 5 -Filter codex.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName }";
 
 /**
  * Windows only, and only when an agent is not found the quick way: where npm puts global commands (a prefix of the
- * person's own that is not on their PATH), and Codex inside an OpenAI app from the Microsoft Store. Asked again after
- * ten minutes, or at once with `fresh`.
+ * person's own that is not on their PATH). Asked again after ten minutes, or at once with `fresh`.
  */
 function windowsSlowSearch({ fresh = false } = {}) {
   if (!windows) return Promise.resolve(slowFound);
   if (slowCache && !fresh && Date.now() - slowCache.at < SLOW_FOR_MS) return slowCache.value;
   const value = (async () => {
     const env = childEnvironment({ shell: await loginShellEnvironment() });
-    const [npm, store] = await Promise.all([
-      run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm prefix -g'], 15_000, { env }),
-      run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', STORE_CODEX], 20_000, { env }),
-    ]);
+    const npm = await run(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm prefix -g'], 15_000, { env });
     const prefix = npm.ok ? npm.stdout.trim().split(/\r?\n/).pop()?.trim() : null;
-    /* the Codex app's own window program is a codex.exe too (`app\Codex.exe`, the filter ignores case): only a console
-       program is the CLI */
-    const exe = store.ok ? store.stdout.split(/\r?\n/).map((l) => l.trim()).find((l) => /codex\.exe$/i.test(l) && isAbsolute(l) && consoleProgram(l)) : null;
-    slowFound = { npmPrefix: prefix && isAbsolute(prefix) ? prefix : null, storeCodex: exe && isAbsolute(exe) ? exe : null };
+    slowFound = { npmPrefix: prefix && isAbsolute(prefix) ? prefix : null };
     return slowFound;
   })().catch(() => slowFound);
   slowCache = { at: Date.now(), value };
@@ -234,7 +225,6 @@ export function resolveAgentCli(id, { pathDirs = [] } = {}) {
     env: { PATH: pathDirs.join(PATH_SEP) },
     pathDirs: searchDirs(),
     chosen: chosenPaths[id] ?? null,
-    others: id === 'codex' && slowFound.storeCodex ? [slowFound.storeCodex] : [],
   });
   return found.cli ? { path: found.cli, source: found.source } : null;
 }
@@ -329,7 +319,7 @@ export async function diagnoseAgent(id, { appVersion = '' } = {}) {
     `Found: ${found ? `${found.path} (${found.source})` : '(not found)'}`,
     ...(windows ? [
       `npm global folder: ${slow.npmPrefix ?? '(unknown)'}`,
-      ...(id === 'codex' ? [`Codex in a Store app: ${slow.storeCodex ?? '(none)'}`] : []),
+      ...(id === 'codex' ? [`Codex the Codex app starts: ${codexAppCopies()[0] ?? '(none)'}`] : []),
       `In WSL: ${found ? '(not checked)' : wsl ?? '(no)'}`,
     ] : []),
     '',
@@ -603,9 +593,8 @@ export async function openAgentInstaller(id) {
 export async function listAgents() {
   /* looked at as the person comes back from installing one: a PATH from a few seconds ago at most */
   const pathDirs = (await loginShellEnvironment({ maxAgeMs: 10_000 })).PATH.split(PATH_SEP);
-  /* the slower search (Windows): always, as it finds Codex inside a Store app, which may be later than one on the PATH
-     (resolveAgentCli takes the later); waited for, a few seconds at most, when one is not found the quick way. What it
-     finds later is there on the next look */
+  /* the slower search (Windows): waited for, a few seconds at most, when one is not found the quick way. What it finds
+     later is there on the next look */
   if (windows) {
     const slow = windowsSlowSearch();
     if (Object.keys(AGENTS).some((id) => !resolveAgentCli(id, { pathDirs }))) {
