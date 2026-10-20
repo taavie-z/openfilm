@@ -274,3 +274,39 @@ test('a sign-in in Terminal is waited for asking only that agent, until it is si
   await new Promise((done) => setTimeout(done, 120));
   assert.equal(late.list().find((a) => a.id === 'cursor').status, 'sign-in');
 });
+
+test("an agent found only as its maker's app: the app said, and its installer run in a terminal and waited for until it is there", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-roster-'));
+  const missing = { id: 'cursor', cli: null, signedIn: null, install: 'https://cursor.com/cli', setupRequired: null, app: 'Cursor', installer: 'curl https://cursor.com/install -fsS | bash' };
+  let installed = false;
+  const opened = [];
+  const r = roster(dir, undefined, {
+    localAgents: async () => [missing],
+    localAgent: async () => (installed ? { ...missing, cli: { path: '/bin/cursor-agent' }, signedIn: false, app: undefined, installer: undefined } : missing),
+    openInstaller: async (id) => { opened.push(id); return { ok: true }; },
+    signInWait: { ms: 2000, pollMs: 10 },
+  });
+  await r.refresh();
+  const before = r.list().find((a) => a.id === 'cursor');
+  assert.equal(before.status, 'missing');
+  assert.equal(before.app, 'Cursor');
+  assert.equal(before.installer, 'curl https://cursor.com/install -fsS | bash');
+  assert.deepEqual(await r.install('cursor'), { ok: true });
+  assert.deepEqual(opened, ['cursor']);
+  await new Promise((done) => setTimeout(done, 30));
+  assert.equal(r.list().find((a) => a.id === 'cursor').installing, true);
+  installed = true;
+  await new Promise((done) => setTimeout(done, 60));
+  const after = r.list().find((a) => a.id === 'cursor');
+  assert.equal(after.status, 'sign-in');
+  assert.equal(after.installing, undefined);
+  assert.deepEqual(await r.install('byok'), { ok: false, error: 'No agent byok' });
+
+  /* a terminal that did not open says why */
+  const failed = roster(mkdtempSync(join(tmpdir(), 'of-roster-')), undefined, {
+    localAgents: async () => [missing], openInstaller: async () => ({ ok: false, error: 'Terminal did not open.' }),
+  });
+  await failed.refresh();
+  assert.deepEqual(await failed.install('cursor'), { ok: false, error: 'Terminal did not open.' });
+  assert.equal(failed.list().find((a) => a.id === 'cursor').error, 'Terminal did not open.');
+});

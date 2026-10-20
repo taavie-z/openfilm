@@ -78,7 +78,7 @@ openfilm skill remove <name>
   A project Studio has not shown yet is opened in Studio first.
 
   --out <file>    another path; .webm or .mov with --alpha
-  --fps <n>       frame rate (30)
+  --fps <n>       frame rate, including decimals such as 29.97 (30)
   --4k            3840 px wide              --scale <n>     any device pixel ratio
   --blur          motion blur (8 samples)   --samples <n>   --shutter <0..1>
   --alpha         transparent background    --workers <n>   parallel browsers`,
@@ -144,7 +144,7 @@ if (o.help || !cmd) { console.log(HELP); process.exit(0); }
 const num = (v) => (v == null ? undefined : Number(v));
 const opts = { ...o, count: num(o.count), scale: num(o.scale), samples: num(o.samples), shutter: num(o.shutter), fps: num(o.fps), workers: num(o.workers) };
 /* a number option out of its range is a wrong command (2), said before anything starts */
-const RANGES = { count: [1, 200, true], fps: [1, 240, true], scale: [0.1, 8, false], samples: [1, 64, true], shutter: [0, 1, false], workers: [1, 64, true] };
+const RANGES = { count: [1, 200, true], fps: [1, 240, false], scale: [0.1, 8, false], samples: [1, 64, true], shutter: [0, 1, false], workers: [1, 64, true] };
 for (const [name, [lo, hi, whole]] of Object.entries(RANGES)) {
   const v = opts[name];
   if (v === undefined || (Number.isFinite(v) && v >= lo && v <= hi && (!whole || Number.isInteger(v)))) continue;

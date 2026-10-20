@@ -10,8 +10,10 @@
  * one does), else under "More agents", with where to get them when they are not installed. The person's own key is on a service of theirs, with a model that reads pictures (the agent looks at its own frames).
  *
  * One not found, or one disconnected, can be pointed at: Locate… opens the system's file dialog, the program chosen is
- * tried and used from then on (Find automatically goes back). A connected one keeps the program it found. "Why isn't
- * it found?" says what was searched, with a report to copy.
+ * tried and used from then on (Find automatically goes back); an editor or a desktop app is refused. A connected one
+ * keeps the program it found. "Why isn't it found?" says what was searched, with a report to copy. One not found that
+ * has an official installer is installed from here: Install shows the exact command, which runs in a terminal window
+ * once the person agrees; the row says when only the maker's desktop app is here.
  *
  * Under a connected agent: the skills and the MCP servers the person added to it themselves, each off in the app until
  * let in (its maker's own are always on).
@@ -112,6 +114,8 @@ export function AgentsSection() {
   const [error, setError] = React.useState<{ id: HostAgentId; text: string } | null>(null);
   const [keyOpen, setKeyOpen] = React.useState(false);
   const [diagnosis, setDiagnosis] = React.useState<{ id: HostAgentId; report: HostAgentDiagnosis | null; copied?: boolean } | null>(null);
+  /* the agent whose installer the person is asked about */
+  const [confirming, setConfirming] = React.useState<HostAgentId | null>(null);
   if (!host) return null;
 
   const act = (id: HostAgentId, run: () => Promise<{ ok?: boolean; error?: string } | unknown>) => {
@@ -129,6 +133,8 @@ export function AgentsSection() {
     if (r.ok) setDiagnosis(null);
     if (r.ok || (!r.error && !r.code)) return { ok: true };
     if (r.code === 'not-a-program') return { ok: false, error: t('settings.agents.notAProgram') };
+    if (r.code === 'app') return { ok: false, error: t('settings.agents.notTheAgentApp').replaceAll('{name}', agent.name) };
+    if (r.code === 'not-cursor-agent') return { ok: false, error: t('settings.agents.notCursorAgent') };
     if (r.code === 'did-not-start') return { ok: false, error: `${t('settings.agents.didNotStart')} ${r.error ?? ''}`.trim() };
     return r;
   });
@@ -161,7 +167,10 @@ export function AgentsSection() {
       case 'off': return t('settings.agents.off');
       case 'sign-in': return t('settings.agents.signedOut');
       case 'waiting': return t('settings.agents.waiting');
-      case 'missing': return agent.setupRequired === 'code-tab' ? t('settings.agents.claudeSetup') : t('settings.agents.missing');
+      case 'missing':
+        if (agent.setupRequired === 'code-tab') return t('settings.agents.claudeSetup');
+        if (agent.installing) return t('settings.agents.installing');
+        return agent.app ? t('settings.agents.appOnly').replace('{app}', agent.app).replaceAll('{name}', agent.name) : t('settings.agents.missing');
       case 'key': return t('settings.agents.needsKey');
       case 'unavailable': return t('settings.agents.unavailable');
       case 'checking': return t('settings.agents.checking');
@@ -204,7 +213,12 @@ export function AgentsSection() {
               {t('settings.agents.locate')}
             </SettingsButton>
           ) : null}
-          {agent.install ? <SettingsLinkButton href={agent.install}><Download size={16} />{t('settings.agents.install')}</SettingsLinkButton> : null}
+          {/* its official installer, run once the person agrees to the command; else its install page */}
+          {agent.installer && host.install ? (
+            <SettingsButton disabled={working || agent.installing || confirming === agent.id} onClick={() => setConfirming(agent.id)}>
+              <Download size={16} />{t('settings.agents.install')}
+            </SettingsButton>
+          ) : agent.install ? <SettingsLinkButton href={agent.install}><Download size={16} />{t('settings.agents.install')}</SettingsLinkButton> : null}
         </>
       );
     }
@@ -242,6 +256,7 @@ export function AgentsSection() {
     const plan = usage[agent.id];
     const meter = chosen && agent.status === 'ready' && PLAN_AGENTS.includes(agent.id) && Boolean(host.usage) && (plan === undefined || Boolean(plan?.windows.length));
     const hint = diag?.report ? hintOf(diag.report) : null;
+    const asking = confirming === agent.id && agent.status === 'missing' && agent.installer && host.install ? agent.installer : null;
     return (
       <SettingsItem
         key={agent.id}
@@ -269,7 +284,7 @@ export function AgentsSection() {
           </>
         )}
       >
-        {agent.status === 'waiting' || open || said || agent.chosen || lost || meter || (chosen && agent.status === 'ready' && (host.mcp || host.skills)) ? (
+        {agent.status === 'waiting' || open || said || agent.chosen || lost || meter || asking || (chosen && agent.status === 'ready' && (host.mcp || host.skills)) ? (
           <div className="flex flex-col gap-1.5 pl-[34px]">
             {meter ? (
               <div className="flex flex-col gap-1.5" aria-label={t('settings.agents.usage')}>
@@ -287,6 +302,16 @@ export function AgentsSection() {
                   <button type="button" onClick={() => act(agent.id, () => host.useAutomatic!(agent.id))} className="underline underline-offset-2 hover:text-[var(--text)]">{t('settings.agents.automatic')}</button>
                 ) : null}
               </p>
+            ) : null}
+            {asking ? (
+              <SettingsInset>
+                <p className="text-[14px] leading-relaxed text-[var(--text)]">{t('settings.agents.installConfirm').replace('{name}', agent.name)}</p>
+                <code className="block break-all rounded-[6px] bg-[var(--fill-tsp)] px-2.5 py-2 font-mono text-[12.5px] text-[var(--text)]">{asking}</code>
+                <div className="flex justify-end gap-1.5">
+                  <SettingsButton variant="quiet" onClick={() => setConfirming(null)}>{t('settings.agents.cancel')}</SettingsButton>
+                  <SettingsButton variant="primary" onClick={() => { setConfirming(null); act(agent.id, () => host.install!(agent.id)); }}>{t('settings.agents.installRun')}</SettingsButton>
+                </div>
+              </SettingsInset>
             ) : null}
             {lost && !diag ? (
               <p className="text-[13.5px] leading-relaxed text-[var(--text-muted)]">

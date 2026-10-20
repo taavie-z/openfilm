@@ -135,12 +135,18 @@ function captureLoginShell(shell, env, timeoutMs) {
   });
 }
 
-/** `reg query <key>` output, read: each value's name and its text (REG_SZ and REG_EXPAND_SZ only). */
-export function parseRegQuery(text) {
+/**
+ * `reg query <key>` output, read: each value's name and its text (REG_SZ and REG_EXPAND_SZ only). `expandable`, when
+ * given, gets the names of the REG_EXPAND_SZ ones: Windows expands those, never a REG_SZ.
+ * @param {string} text @param {Set<string>} [expandable]
+ */
+export function parseRegQuery(text, expandable) {
   const values = {};
   for (const line of String(text ?? '').split(/\r?\n/)) {
     const m = /^\s{2,}(\S(?:.*?\S)?)\s{2,}(REG_SZ|REG_EXPAND_SZ)\s{2,}(.*)$/.exec(line);
-    if (m) values[m[1]] = m[3].trim();
+    if (!m) continue;
+    values[m[1]] = m[3].trim();
+    if (m[2] === 'REG_EXPAND_SZ') expandable?.add(m[1]);
   }
   return values;
 }
@@ -151,16 +157,27 @@ export function expandWindowsVars(text, vars) {
   return String(text ?? '').replace(/%([^%;]+)%/g, (all, name) => (typeof lower.get(name.toLowerCase()) === 'string' ? lower.get(name.toLowerCase()) : all));
 }
 
-const valueOf = (vars, name) => Object.entries(vars ?? {}).find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
+/**
+ * Whether Windows expands a registry value: only a REG_EXPAND_SZ one, which `expandable` (from parseRegQuery) lists.
+ * Without a list, every value is taken as one.
+ * @param {Set<string> | undefined} expandable @param {string} name
+ */
+const expands = (expandable, name) => !expandable || expandable.has(name);
 
 /**
  * The PATH Windows gives a program started now: the system's, then the person's (as the registry has them, their
- * variables expanded), then whatever else the app's own PATH has. Each folder once, whatever its case.
+ * variables expanded when they are REG_EXPAND_SZ), then whatever else the app's own PATH has. Each folder once,
+ * whatever its case. `expand`: the REG_EXPAND_SZ names of each part (parseRegQuery).
  */
-export function windowsFreshPath({ machine = {}, user = {}, source = process.env } = {}) {
+export function windowsFreshPath({ machine = {}, user = {}, source = process.env, expand = undefined } = {}) {
   const vars = { ...source, ...machine, ...user };
-  const dirs = [valueOf(machine, 'Path'), valueOf(user, 'Path'), pathOf(source)]
-    .flatMap((p) => expandWindowsVars(p ?? '', vars).split(';'))
+  const pathIn = (values, expandable) => {
+    const name = Object.keys(values ?? {}).find((k) => k.toLowerCase() === 'path');
+    if (name === undefined) return '';
+    return expands(expandable, name) ? expandWindowsVars(values[name], vars) : values[name];
+  };
+  const dirs = [pathIn(machine, expand?.machine), pathIn(user, expand?.user), expandWindowsVars(pathOf(source), vars)]
+    .flatMap((p) => p.split(';'))
     .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
     .filter(Boolean);
   const seen = new Map();
@@ -174,7 +191,11 @@ const REG_USER = 'HKCU\\Environment';
 function regQuery(key, timeoutMs) {
   return new Promise((resolve) => {
     const reg = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe');
-    execFile(reg, ['query', key], { timeout: timeoutMs, encoding: 'utf8', windowsHide: true }, (error, stdout) => resolve(error ? null : parseRegQuery(stdout)));
+    execFile(reg, ['query', key], { timeout: timeoutMs, encoding: 'utf8', windowsHide: true }, (error, stdout) => {
+      if (error) return resolve(null);
+      const expandable = new Set();
+      resolve({ values: parseRegQuery(stdout, expandable), expandable });
+    });
   });
 }
 
@@ -206,13 +227,31 @@ export function environmentCache(read, { forMs, fallback, now = Date.now }) {
   };
 }
 
+/**
+ * The registry's variables as a program started now has them: the person's over the system's, each REG_EXPAND_SZ
+ * one's `%NAME%` expanded (ComSpec is stored as %SystemRoot%\system32\cmd.exe) and a REG_SZ one as it is, and PATH
+ * from windowsFreshPath in place of either Path. `expand`: the REG_EXPAND_SZ names of each part (parseRegQuery).
+ */
+export function registryVariables({ machine = {}, user = {}, source = process.env, expand = undefined } = {}) {
+  const raw = { ...machine, ...user };
+  const vars = { ...source, ...raw };
+  const env = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key.toLowerCase() === 'path') continue;
+    const expandable = Object.hasOwn(user, key) ? expand?.user : expand?.machine;
+    env[key] = expands(expandable, key) ? expandWindowsVars(expandWindowsVars(value, vars), vars) : value;
+  }
+  env.PATH = windowsFreshPath({ machine, user, source, expand });
+  return env;
+}
+
 /** The registry's environment (Windows): null when neither part of it could be read. */
 async function readRegistry(source, timeoutMs) {
   const [machine, user] = await Promise.all([regQuery(REG_MACHINE, timeoutMs), regQuery(REG_USER, timeoutMs)]);
   if (!machine && !user) return null;
   pathSource = 'registry';
-  /* the person's own variables as they are now, over the system's */
-  return shellVariables({ ...machine, ...user, PATH: windowsFreshPath({ machine: machine ?? {}, user: user ?? {}, source }) }, homedir());
+  const expand = { machine: machine?.expandable ?? new Set(), user: user?.expandable ?? new Set() };
+  return shellVariables(registryVariables({ machine: machine?.values ?? {}, user: user?.values ?? {}, source, expand }), homedir());
 }
 
 /** The login shell's variables (shellVariables): null when it gave no PATH (it failed, or took too long). */

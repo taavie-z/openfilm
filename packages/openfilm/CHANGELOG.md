@@ -1,5 +1,23 @@
 # openfilm
 
+## 0.2.2
+
+### Patch Changes
+
+- [#110](https://github.com/openfilm/openfilm/pull/110) [`7d35283`](https://github.com/openfilm/openfilm/commit/7d352837b96754793d7c2e7c1d129656a29cfdba) Thanks [@PazChen](https://github.com/PazChen)! - Desktop: agents work for people who installed only the maker's app: Claude Code and OpenCode from inside their apps, and an Install button that runs the official installer for the others. The Cursor editor is never started in place of Cursor's agent.
+
+- [#98](https://github.com/openfilm/openfilm/pull/98) [`f771d05`](https://github.com/openfilm/openfilm/commit/f771d053d31ef28fd0c21ce1ca5e848a632b2954) Thanks [@cristinamadureira353-svg](https://github.com/cristinamadureira353-svg)! - Studio: an export can be named where it is asked for — a name field beside the folder it goes to, the project's name in it to begin with — instead of every file taking the project's name. A named export keeps the suffixes that tell the files of one export apart (` · 哔哩哔哩`, `(alpha)`, `stills`) and drops the ones that only describe the project (`1080p`, `0-9s`). A name left empty is the project's, as before, and an export that would take a name already there still gets ` 2` rather than being written over.
+
+- [#106](https://github.com/openfilm/openfilm/pull/106) [`3582b88`](https://github.com/openfilm/openfilm/commit/3582b88e75099d0f9af9f927d5ae042826f5e88b) Thanks [@taavie-z](https://github.com/taavie-z)! - Keep Final Cut Pro subtitles white with a black outline and a soft shadow. Correct Basic Title font scaling so subtitle size stays proportional in low-resolution, 4K and portrait sequences.
+
+- [#108](https://github.com/openfilm/openfilm/pull/108) [`7192264`](https://github.com/openfilm/openfilm/commit/71922644da5d6b67db2cc796d4e057f98999944f) Thanks [@taavie-z](https://github.com/taavie-z)! - Resize media contact-sheet thumbnails before embedding them, preventing "Invalid string length" on high-resolution, high-bit-depth clips. Single-frame output keeps its original resolution. A transparent WebM (VP9 or VP8) keeps its alpha in the sheet and in a single frame.
+
+- [#101](https://github.com/openfilm/openfilm/pull/101) [`bc1ae78`](https://github.com/openfilm/openfilm/commit/bc1ae787dda20a9a7fe3e5b6d3f9aba8863cc2fc) Thanks [@PazChen](https://github.com/PazChen)! - Render: when an encode fails on Windows, the error says why instead of a permission error from cleaning up.
+
+- [#107](https://github.com/openfilm/openfilm/pull/107) [`94ea4c8`](https://github.com/openfilm/openfilm/commit/94ea4c8237f933866e9ef5a7b41bdca4e64db4e2) Thanks [@taavie-z](https://github.com/taavie-z)! - Allow decimal frame rates such as 23.976, 29.97 and 59.94 in `openfilm render --fps`, keeping the existing range of 1 to 240. The NTSC rates render at their exact rates (24000/1001, 30000/1001, 60000/1001), as footage shot at them is.
+
+- [#109](https://github.com/openfilm/openfilm/pull/109) [`5f8b70f`](https://github.com/openfilm/openfilm/commit/5f8b70f8a453dc10fe3c86dd103c420473051fab) Thanks [@PazChen](https://github.com/PazChen)! - On macOS, an update that is ready now installs when you quit even if you open OpenFilm again right away. Opened while the update is still being installed, OpenFilm waits for the install to finish and then opens as the new version. If an install did not happen, the next launch installs it in a small window that says so, then opens as the new version. The update notice says what happens when you quit.
+
 ## 0.2.1
 
 ### Patch Changes

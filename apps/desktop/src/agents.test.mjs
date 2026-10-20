@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason } from './agents.mjs';
+import { AgentSession, CLIENT_CAPABILITIES, agentDefaults, closeEverySession, planProblem, probeFolder, CODEX_UTF8_CMD, agentShell, allowOption, codexDeveloperInstructions, codexLaunchEnv, distinctOptions, errorCause, legacyOptions, powerShellScript, powerShellLine, terminalScript, checkAgentProgram, readAgentStatus, setChosenPaths, signInScript, turnError, signInError, codexTooOld, AGENTS, ownSignIn, codexServiceError, codexRefusal, codexNotice, explainFailure, stderrReason } from './agents.mjs';
 
 test('an agent that asks: yes for good where it offers that, else yes this once; nothing to say yes with is null', () => {
   const options = [
@@ -189,12 +189,13 @@ test('on Windows, Codex is started through a script that turns the console to UT
 });
 
 test('a signed-out Cursor is said to need its sign-in at once, without the session that would open its sign-in page', async () => {
-  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const dir = mkdtempSync(join(tmpdir(), 'of-cursor-'));
-  /* says it is signed out, and never answers over ACP (Cursor waits on its sign-in page there) */
-  const program = join(dir, 'cursor-agent.mjs');
+  /* says it is signed out, and never answers over ACP (Cursor waits on its sign-in page there); in Cursor's own folder */
+  mkdirSync(join(dir, 'cursor-agent'));
+  const program = join(dir, 'cursor-agent', 'cursor-agent.mjs');
   writeFileSync(program, "if (process.argv.includes('status')) console.log('Not logged in'); else setInterval(() => {}, 1000);\n");
   setChosenPaths({ cursor: program });
   const session = new AgentSession({ agent: 'cursor', cwd: dir });
@@ -397,4 +398,27 @@ test("what an agent's stderr says: the lines that name an error, else its last l
   assert.equal(stderrReason('starting\nwarning: slow disk\nlistening'), 'starting | warning: slow disk | listening');
   assert.equal(stderrReason('ok\nError: cannot read config.toml\n    at load (x.js:1:1)\ndone'), 'Error: cannot read config.toml');
   assert.equal(stderrReason(''), '');
+});
+
+test('an installer runs as its maker wrote it: in Terminal on a Mac, in a PowerShell window of its own on Windows', () => {
+  assert.equal(terminalScript('curl https://cursor.com/install -fsS | bash'),
+    'tell application "Terminal"\nactivate\ndo script "curl https://cursor.com/install -fsS | bash"\nend tell');
+  const lines = powerShellLine('Cursor install', "irm 'https://cursor.com/install?win32=true' | iex").slice(1).split('\r\n');
+  assert.deepEqual(lines.slice(0, 2), ["$Host.UI.RawUI.WindowTitle = 'Cursor install'", "irm 'https://cursor.com/install?win32=true' | iex"]);
+});
+
+test('a program chosen that is an editor, or not Cursor\'s own agent, is refused without being started', async () => {
+  if (process.platform === 'win32') return;
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const home = mkdtempSync(join(tmpdir(), 'of-check-'));
+  /* it would leave a mark if it were started */
+  const exe = (file) => { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, `#!/bin/sh\ntouch "${file}.ran"\n`, { mode: 0o755 }); return file; };
+  const code = exe(join(home, 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'copilot'));
+  assert.deepEqual(await checkAgentProgram('copilot', code), { ok: false, error: "This is an editor or a desktop app, not the agent's command-line program.", code: 'app' });
+  const stray = exe(join(home, 'bin', 'agent'));
+  assert.equal((await checkAgentProgram('cursor', stray)).code, 'not-cursor-agent');
+  const { existsSync } = await import('node:fs');
+  assert.equal(existsSync(`${code}.ran`) || existsSync(`${stray}.ran`), false);
 });

@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { environmentCache, expandWindowsVars, parseRegQuery, shellSubset, shellVariables, windowsFreshPath } from './environment.mjs';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import {
+  childEnvironment, environmentCache, expandWindowsVars, lastPathSource, loginShellVariables, parseRegQuery, registryVariables, shellSubset,
+  shellVariables, windowsFreshPath,
+} from './environment.mjs';
 
 const PROFILE = ['C:', 'Users', 'someone'].join('\\');
 
@@ -36,6 +41,50 @@ test("the PATH a program started now gets: the system's, the person's (with thei
     'C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps', 'C:\\Users\\someone\\AppData\\Local\\nvm', 'C:\\nvm4w\\nodejs', 'C:\\Users\\someone\\AppData\\Roaming\\npm',
     'C:\\Old\\stale',
   ].join(';'));
+});
+
+test("the registry's variables are handed on expanded, so an agent finds cmd.exe through ComSpec", () => {
+  const machine = { ComSpec: '%SystemRoot%\\system32\\cmd.exe', SystemRoot: 'C:\\Windows', Path: '%SystemRoot%\\system32' };
+  const user = parseRegQuery(USER);
+  const env = registryVariables({ machine, user, source: { USERPROFILE: PROFILE } });
+  assert.equal(env.ComSpec, 'C:\\Windows\\system32\\cmd.exe');
+  assert.equal(env.TEMP, `${PROFILE}\\AppData\\Local\\Temp`);
+  assert.equal(env.Path, undefined, 'one PATH only');
+  assert.match(env.PATH, /^C:\\Windows\\system32;/);
+});
+
+test('only REG_EXPAND_SZ values are expanded, as Windows does: a REG_SZ one keeps its %VARIABLE% as it is', () => {
+  const machine = new Set();
+  const user = new Set();
+  const env = registryVariables({
+    machine: parseRegQuery([
+      '    ComSpec    REG_EXPAND_SZ    %SystemRoot%\\system32\\cmd.exe',
+      '    Literal    REG_SZ    %SystemRoot%\\kept',
+      '    Path    REG_SZ    %SystemRoot%\\system32;C:\\Tools',
+      '    SystemRoot    REG_SZ    C:\\Windows',
+    ].join('\r\n'), machine),
+    user: parseRegQuery(USER, user),
+    source: { USERPROFILE: PROFILE },
+    expand: { machine, user },
+  });
+  assert.deepEqual([...machine], ['ComSpec']);
+  assert.equal(env.ComSpec, 'C:\\Windows\\system32\\cmd.exe');
+  assert.equal(env.Literal, '%SystemRoot%\\kept');
+  assert.equal(env.TEMP, `${PROFILE}\\AppData\\Local\\Temp`);
+  assert.match(env.PATH, /^%SystemRoot%\\system32;C:\\Tools;C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps;/);
+});
+
+test("on Windows, an agent given this machine's registry environment starts cmd.exe through ComSpec", { skip: process.platform !== 'win32' }, async () => {
+  const env = childEnvironment({ shell: await loginShellVariables({ maxAgeMs: 0 }) });
+  assert.equal(lastPathSource(), 'registry');
+  const comspec = Object.entries(env).filter(([k]) => k.toLowerCase() === 'comspec');
+  assert.equal(comspec.length, 1, 'one ComSpec');
+  assert.doesNotMatch(comspec[0][1], /%/);
+  assert.ok(existsSync(comspec[0][1]), comspec[0][1]);
+  /* what an agent does with it: Node runs a shell command through its own ComSpec */
+  const r = spawnSync(process.execPath, ['-e', "process.stdout.write(require('node:child_process').execSync('echo ok', { encoding: 'utf8' }))"], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'ok');
 });
 
 test('the environment is read again once it is old, sooner when asked; a failed read keeps the last good one', async () => {

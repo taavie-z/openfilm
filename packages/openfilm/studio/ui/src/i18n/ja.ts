@@ -50,7 +50,7 @@ export const ja: Words = {
   /* the app's update, ready to install (Studio's top bar, in an app that has updates: lib/host.ts `update`) */
   update: {
     restart: '再起動してアップデート',
-    ready: 'OpenFilm {version} の準備ができました。今すぐ再起動してインストールするか、次に終了するときに自動でインストールされます。',
+    ready: 'OpenFilm {version} の準備ができました。今すぐ再起動して更新するか、終了時に自動でインストールされ、次に開くと新しいバージョンになります。',
     agentBusy: 'エージェントがまだ作業中です。終わってから再起動してください。',
     exporting: '書き出し中です。終わってから再起動してください。',
     installFailed: 'OpenFilm {version} をインストールできませんでした。OpenFilm を終了してもう一度開くとインストールされます。',
@@ -1579,6 +1579,12 @@ export const ja: Words = {
       chosenAt: '選択したプログラムを使用中：{path}',
       automatic: '自動検出に戻す',
       notAProgram: 'このコンピュータで起動できるプログラムではありません。エージェントのプログラム自体を選んでください（Windows では .exe または .cmd ファイル）。',
+      appOnly: '{app} アプリはインストールされていますが、接続には {name} のコマンドラインエージェントが必要です。',
+      installing: 'ターミナルウィンドウでインストール中… 終わると OpenFilm が見つけます。',
+      installConfirm: 'OpenFilm はターミナルウィンドウを開き、{name} の公式インストーラーを実行します：',
+      installRun: 'インストーラーを実行',
+      notTheAgentApp: 'これはエディターかデスクトップアプリで、{name} のコマンドラインエージェントではありません。接続には {name} のコマンドラインエージェントが必要です。',
+      notCursorAgent: 'これは Cursor のコマンドラインエージェントではありません（cursor-agent フォルダーにインストールされます）。接続には Cursor のコマンドラインエージェントが必要です。',
       didNotStart: 'ここからは起動できませんでした：',
       unreadable: '自分の設定を読み込めないため起動できません。設定ファイルの該当箇所を直すか、更新してください：',
       whyMissing: '見つからない理由は？',

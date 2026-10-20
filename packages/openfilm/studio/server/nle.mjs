@@ -24,6 +24,7 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { clipKind, pictureRect, soundRole } from '../../src/film-doc.mjs';
+import { exactRate } from '../../src/rate.mjs';
 
 /**
  * @typedef {import('../../src/film-doc.mjs').FilmBox} FilmBox
@@ -73,7 +74,7 @@ export const nleFps = (fps) => NLE_FPS.reduce((best, f) => (Math.abs(f - fps) < 
 /** 29.97 / 59.94 / 23.976 → ntsc (a whole timebase, the true rate ×1000/1001). @param {number} fps @returns {NleRate} */
 export function nleRate(fps) {
   const base = Math.max(1, Math.round(fps));
-  const ntsc = Math.abs(fps - base) > 0.001 && Math.abs(fps - (base * 1000) / 1001) < 0.01;
+  const ntsc = exactRate(fps).den === 1001;
   return ntsc ? { timebase: base, ntsc: true, fps: (base * 1000) / 1001 } : { timebase: base, ntsc: false, fps: base };
 }
 

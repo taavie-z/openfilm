@@ -20,6 +20,8 @@
  *
  * One of the person's own agents not found where it is looked for can be pointed at (`locate`): the program they choose
  * is tried (it has to answer `--version`) and used from then on, until they go back to finding it (`useAutomatic`).
+ * One with an official installer can be installed (`install`): it runs in a terminal window, and the agent is looked
+ * for again until it is there.
  * `diagnose` says what was searched, for them to read or send with an issue.
  *
  * Each has a switch for whether the chat's menu shows it. Kept in the app's data folder: agents.json (the choices) and
@@ -27,7 +29,9 @@
  * the one key of a version before, is the key of the models set up then).
  *
  * State per agent: ready · off (disconnected here) · sign-in (its own sign-in is needed) · waiting (signing in, in
- * Terminal) · missing (not installed; `install` says where from) · key (no key set up) · checking (not known yet).
+ * Terminal) · missing (not installed; `install` says where from, `installer` the command that installs it, `app` the
+ * maker's desktop app when only that is here, `installing` while its installer runs) · key (no key set up) · checking
+ * (not known yet).
  *
  * Reads no Electron module, so `node --test` can use it.
  */
@@ -184,9 +188,10 @@ export async function probeModel({ format, baseUrl, key, model, fetch: fetchImpl
  *
  * @param {{
  *   dataDir: string,
- *   localAgents: () => Promise<Array<{ id: string, cli: { path: string } | null, signedIn: boolean | null, account?: object | null, problem?: string, install: string | null, setupRequired: string | null }>>,
- *   localAgent?: (id: string) => Promise<{ id: string, cli: { path: string } | null, signedIn: boolean | null, account?: object | null, problem?: string, install: string | null, setupRequired: string | null }>,
+ *   localAgents: () => Promise<Array<{ id: string, cli: { path: string } | null, signedIn: boolean | null, account?: object | null, problem?: string, install: string | null, setupRequired: string | null, app?: string | null, installer?: string | null }>>,
+ *   localAgent?: (id: string) => Promise<{ id: string, cli: { path: string } | null, signedIn: boolean | null, account?: object | null, problem?: string, install: string | null, setupRequired: string | null, app?: string | null, installer?: string | null }>,
  *   openSignIn: (id: string) => Promise<{ ok: boolean, error?: string }>,
+ *   openInstaller?: (id: string) => Promise<{ ok: boolean, error?: string }>,
  *   usePaths?: (paths: Record<string, string>) => void,
  *   pickProgram?: (id: string, words?: { title?: string, button?: string }) => Promise<string | null>,
  *   checkProgram?: (id: string, path: string) => Promise<{ ok: boolean, error?: string, code?: string }>,
@@ -197,14 +202,15 @@ export async function probeModel({ format, baseUrl, key, model, fetch: fetchImpl
  *   fetch?: typeof fetch,
  *   signInWait?: { ms: number, pollMs: number },
  * }} deps
- * `localAgent(id)`: one agent as `localAgents` has it, asked alone while its sign-in is waited for (`signInWait`).
+ * `localAgent(id)`: one agent as `localAgents` has it, asked alone while its sign-in or its install is waited for
+ * (`signInWait`).
  */
 export function createRoster(deps) {
   const { dataDir } = deps;
   let choices = readChoices(dataDir);
   deps.usePaths?.(choices.paths);
-  /** what is happening now, beyond what is kept: a sign-in waited for, an error to show */
-  const live = { waiting: {}, errors: {} };
+  /** what is happening now, beyond what is kept: a sign-in or an install waited for, an error to show */
+  const live = { waiting: {}, installing: {}, errors: {} };
   let local = null;
 
   /* each own model's key by its id; the one key of a version before is the key of the models set up then */
@@ -230,7 +236,10 @@ export function createRoster(deps) {
       const found = local?.find((a) => a.id === id);
       if (!found) return { status: 'checking' };
       const where = { path: found.cli?.path ?? null, chosen: choices.paths[id] ?? null };
-      if (!found.cli) return { status: 'missing', install: found.install ?? null, setupRequired: found.setupRequired ?? null, ...where };
+      if (!found.cli) {
+        return { status: 'missing', install: found.install ?? null, setupRequired: found.setupRequired ?? null, app: found.app ?? null, installer: found.installer ?? null,
+          ...(live.installing[id] ? { installing: true } : {}), ...where };
+      }
       if (choices.disconnected.includes(id)) return { status: 'off', ...where };
       if (found.signedIn === false) return { status: live.waiting[id] ? 'waiting' : 'sign-in', ...where };
       return { status: 'ready', ...where, ...(found.account ? { account: { ...found.account } } : {}), ...(found.problem ? { problem: found.problem } : {}) };
@@ -270,19 +279,21 @@ export function createRoster(deps) {
     changed();
   }
 
-  async function waitForSignIn(id) {
-    live.waiting[id] = true;
+  /** Looked at again every few seconds until `done` says so, or for as long as a sign-in is waited for. */
+  async function waitFor(id, kind, done) {
+    live[kind][id] = true;
     changed();
     const wait = deps.signInWait ?? SIGN_IN_WAIT;
     const until = Date.now() + wait.ms;
-    while (Date.now() < until && live.waiting[id]) {
-      await new Promise((done) => setTimeout(done, wait.pollMs));
+    while (Date.now() < until && live[kind][id]) {
+      await new Promise((resolve) => setTimeout(resolve, wait.pollMs));
       await lookAgain(id);
-      if (local?.find((a) => a.id === id)?.signedIn !== false) break;
+      if (done(local?.find((a) => a.id === id))) break;
     }
-    delete live.waiting[id];
+    delete live[kind][id];
     changed();
   }
+  const waitForSignIn = (id) => waitFor(id, 'waiting', (a) => a?.signedIn !== false);
 
   return {
     list,
@@ -338,6 +349,19 @@ export function createRoster(deps) {
       deps.usePaths?.(choices.paths);
       save(choices);
       await refresh();
+      return { ok: true };
+    },
+
+    /**
+     * Install one of the person's own agents with its official installer, in a terminal window (the person agreed to
+     * the command first), then look for it every few seconds until it is there.
+     */
+    async install(id) {
+      if (!isOwn(id) || !deps.openInstaller) return { ok: false, error: `No agent ${id}` };
+      delete live.errors[id];
+      const opened = await deps.openInstaller(id);
+      if (!opened.ok) { live.errors[id] = opened.error ?? 'Terminal did not open.'; changed(); return { ok: false, error: live.errors[id] }; }
+      void waitFor(id, 'installing', (a) => Boolean(a?.cli));
       return { ok: true };
     },
 

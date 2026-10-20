@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('openfilmNative', {
     setShown: (id, shown) => ipcRenderer.invoke('desktop:agents:shown', { id, shown: shown === true }),
     locate: (id, words) => ipcRenderer.invoke('desktop:agents:locate', { id, words }),
     useAutomatic: (id) => ipcRenderer.invoke('desktop:agents:automatic', { id }),
+    install: (id) => ipcRenderer.invoke('desktop:agents:install', { id }),
     diagnose: (id) => ipcRenderer.invoke('desktop:agents:diagnose', { id }),
     report: () => ipcRenderer.invoke('desktop:agents:report'),
     /* the whole diagnostic report on the clipboard (main.mjs): the chat's, by a turn that failed */
@@ -119,6 +120,8 @@ contextBridge.exposeInMainWorld('openfilmNative', {
   saveLayout: (layout) => ipcRenderer.send('desktop:layout', { chatOpen: layout?.chatOpen === true, chatWidth: Number(layout?.chatWidth) }),
   /* the page's theme, for the window behind it and the system's menus and dialogs */
   setTheme: (theme) => ipcRenderer.send('desktop:theme', theme === 'dark' ? 'dark' : 'light'),
+  /* the page's language, for what the app shows before a page is up */
+  setLanguage: (language) => ipcRenderer.send('desktop:language', String(language)),
   onFullScreen: on('desktop:full-screen'),
   /* View → Chat in the app's menu */
   onToggleChat: on('desktop:toggle-chat'),

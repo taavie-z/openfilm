@@ -7,6 +7,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { clipKind, FILM_FILE } from './film-doc.mjs';
 import { broken, encoders, hardwareEncoder, hardwareOptions, proresOptions } from './encoders.mjs';
 import { FilmPage, launch } from './host.mjs';
+import { exactRate, ffmpegRate } from './rate.mjs';
 import { browserCopies, filmVideos } from './seekable.mjs';
 import { ffmpeg, filmSound, fmt, kill, mix, open, outDir, parseTarget, shown, UsageError, write } from './shared.mjs';
 
@@ -80,7 +81,9 @@ export async function render(args, opts = {}) {
   const meta = probe.film.meta;
   await probe.film.close();
 
-  const fps = Number(opts.fps ?? 30);
+  /* 29.97 is 30000/1001, as the footage shot at it is (rate.mjs) */
+  const rate = exactRate(Number(opts.fps ?? 30));
+  const fps = rate.fps;
   /* a page without a duration has no end: it is rendered by a range */
   const end = meta.duration ?? Infinity;
   if (!range && meta.duration == null) { await probe.close(); throw new UsageError('this page has no duration, so it has no end: give a range to render, e.g. openfilm render 0-6'); }
@@ -162,7 +165,7 @@ export async function render(args, opts = {}) {
       const stop = new AbortController();
       const quit = () => stop.abort();
       opts.signal?.addEventListener('abort', quit, { once: true });
-      const runs = parts.map((p) => encode(p, { fps, samples, shutter, duration: end, format: f, onFrame: progress, still: alpha ? 'png' : 'jpeg', signal: stop.signal }));
+      const runs = parts.map((p) => encode(p, { fps, rate, samples, shutter, duration: end, format: f, onFrame: progress, still: alpha ? 'png' : 'jpeg', signal: stop.signal }));
       try {
         await unlessCancelled(Promise.all(runs));
       } catch (e) {
@@ -215,7 +218,7 @@ export async function render(args, opts = {}) {
     encoder,
     lines: [
       `→ ${shown(out)}`,
-      `  ${total} frames · ${fmt(to - from)} at ${fps} fps · ${Math.round(meta.width * scale)}×${Math.round(meta.height * scale)}${samples > 1 ? ` · ${samples} samples/frame` : ''}${alpha ? ' · alpha' : ''} · ${workers} worker${workers > 1 ? 's' : ''} · ${encoder} · ${seconds.toFixed(1)} s`,
+      `  ${total} frames · ${fmt(to - from)} at ${Number(fps.toFixed(3))} fps · ${Math.round(meta.width * scale)}×${Math.round(meta.height * scale)}${samples > 1 ? ` · ${samples} samples/frame` : ''}${alpha ? ' · alpha' : ''} · ${workers} worker${workers > 1 ? 's' : ''} · ${encoder} · ${seconds.toFixed(1)} s`,
       ...problems.map((p) => `✗ ${p.kind === 'request' ? 'request' : 'page'}: ${p.message}`),
     ],
   };
@@ -264,10 +267,10 @@ export function defaultWorkers({ cores, available } = machine(), frames = Infini
 }
 
 /** Frames [a, b) of one page into one file; sub-frames are averaged by ffmpeg (tmix) and every n-th kept. */
-async function encode({ film, a, b, file }, { fps, samples, shutter, duration, format, onFrame, still, signal }) {
-  const blur = samples > 1 ? `tmix=frames=${samples},select='eq(mod(n\\,${samples})\\,${samples - 1})',setpts=N/(${fps}*TB),` : '';
-  const enc = ffmpeg(['-f', 'image2pipe', '-framerate', String(fps * samples), '-c:v', still === 'png' ? 'png' : 'mjpeg', '-i', '-',
-    '-vf', blur + format.pix, '-r', String(fps), ...format.video, file], { input: true });
+async function encode({ film, a, b, file }, { fps, rate, samples, shutter, duration, format, onFrame, still, signal }) {
+  const blur = samples > 1 ? `tmix=frames=${samples},select='eq(mod(n\\,${samples})\\,${samples - 1})',setpts=N/((${ffmpegRate(rate)})*TB),` : '';
+  const enc = ffmpeg(['-f', 'image2pipe', '-framerate', ffmpegRate(rate, samples), '-c:v', still === 'png' ? 'png' : 'mjpeg', '-i', '-',
+    '-vf', blur + format.pix, '-r', ffmpegRate(rate), ...format.video, file], { input: true });
   /* a cancelled render stops its encoder at once: the frames ffmpeg still holds are thrown away, not encoded (a 4K
      encode takes seconds to drain); the parts folder goes with it (see render's finally) */
   const stop = () => kill(enc.proc);

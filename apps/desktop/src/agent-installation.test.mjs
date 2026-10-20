@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chosenProgram, claudeAppCli, claudeVersion, cmdTarget, codexVersion, consoleProgram, detectAgentInstallation, findExecutable, laterVersion, searchReport, windowsBinDirs } from './agent-installation.mjs';
+import { AGENT_INSTALLERS, chosenProgram, claudeAppCli, claudeVersion, cmdTarget, codexVersion, consoleProgram, desktopApp, detectAgentInstallation, findExecutable, installCommand, laterVersion, notTheAgent, opencodeVersion, searchReport, windowsBinDirs } from './agent-installation.mjs';
 
 test("an npm .cmd shim (Windows) runs its package's script: that is what gets started", () => {
   const npm = mkdtempSync(join(tmpdir(), 'of-npm-'));
@@ -19,11 +19,11 @@ test("an npm .cmd shim (Windows) runs its package's script: that is what gets st
 test('Claude Code as the Claude app keeps it: straight in a version folder, or one build folder down; newest first', () => {
   const home = mkdtempSync(join(tmpdir(), 'of-home-'));
   const root = join(home, 'Library/Application Support/Claude/claude-code');
-  assert.equal(claudeAppCli(home), null);
+  assert.equal(claudeAppCli(home, { win: false }), null);
   const old = join(root, '2.1.9', 'claude.app/Contents/MacOS/claude');
   const recent = join(root, '2.1.10', 'f2326db61802', 'claude.app/Contents/MacOS/claude');
   for (const file of [old, recent]) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, '', { mode: 0o755 }); }
-  assert.equal(claudeAppCli(home), recent);
+  assert.equal(claudeAppCli(home, { win: false }), recent);
 });
 
 test("an agent is found by any of its names, and in its own installer's folder off the PATH (Kimi Code's ~/.kimi-code/bin)", () => {
@@ -184,7 +184,8 @@ test('the report: every folder searched, each file with the name, what a shim ru
   put(join(npm, 'qwen.cmd'), npmShim('node_modules\\@qwen-code\\qwen-code\\cli.js'));
   put(join(npm, 'qwen.ps1'), '');
   const report = searchReport('qwen', { home, env: { PATH: `${npm};${npm.toUpperCase()}` }, pathDirs: [join(home, 'other')], win: true });
-  assert.deepEqual(report.searched, [npm, join(home, 'other')], 'each folder once, whatever its case');
+  const own = join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'qwen-code', 'bin');
+  assert.deepEqual(report.searched, [npm, join(home, 'other'), own], 'each folder once, whatever its case, its own installer\'s last');
   assert.deepEqual(report.files, [
     { file: join(npm, 'qwen'), runs: join(npm, 'qwen'), usable: false },
     { file: join(npm, 'qwen.cmd'), runs: script, usable: true },
@@ -281,4 +282,165 @@ test("Cursor installed as `agent` alone is found; another program called `agent`
   /* both links, as the installer makes them now: `cursor-agent` first */
   symlinkSync(real, join(bin, 'cursor-agent'));
   assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: '' }, pathDirs: [bin] }).cli, join(bin, 'cursor-agent'));
+});
+
+/* the .cmd an editor keeps in resources\app\bin (Windows): it runs the editor with Node, its arguments files to open */
+const editorShim = (exe) => `@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%~dp0..\\..\\..\\${exe}" "%~dp0..\\out\\cli.js" %*\r\nendlocal\r\n`;
+
+test("an editor's own launcher is never taken for an agent: a .cmd running its out/cli.js, or anything in its resources/app/bin", () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  /* the Cursor editor on Windows, its launcher picked or found as Cursor's agent */
+  const root = join(home, 'AppData', 'Local', 'Programs', 'cursor');
+  const cli = put(join(root, 'resources', 'app', 'out', 'cli.js'));
+  const bin = join(root, 'resources', 'app', 'bin');
+  const cursorCmd = put(join(bin, 'cursor.cmd'), editorShim('Cursor.exe'));
+  assert.equal(chosenProgram(cursorCmd, { names: ['cursor-agent', 'agent'], win: true }), cli, 'what the shim runs: the editor');
+  assert.equal(notTheAgent('cursor', cli, { chosen: cursorCmd, win: true }), 'app');
+  assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [], chosen: cursorCmd, win: true }).cli, null,
+    'a launcher chosen before is not used');
+  /* one named like the agent in an editor's bin folder is not it either */
+  put(join(bin, 'agent.cmd'), editorShim('Cursor.exe'));
+  assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: bin }, pathDirs: [], applicationDirs: [], win: true }).cli, null);
+  /* VS Code's own `code` launcher on Windows, under Microsoft VS Code */
+  const code = put(join(home, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'copilot.cmd'), '@echo off\r\n');
+  assert.equal(notTheAgent('copilot', code, { win: true }), 'app');
+  /* a program of the agent's own is never refused */
+  const npm = join(home, 'npm');
+  const script = put(join(npm, 'node_modules', '@github', 'copilot', 'npm-loader.js'));
+  put(join(npm, 'copilot.cmd'), npmShim('node_modules\\@github\\copilot\\npm-loader.js'));
+  assert.equal(notTheAgent('copilot', script, { chosen: join(npm, 'copilot.cmd'), win: true }), null);
+});
+
+test("on a Mac an editor's launcher in its app, or linked from a bin folder, is skipped for the agent's own further on", () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const inApp = put(join(home, 'Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'copilot'), '', 0o755);
+  const linked = join(home, 'linked');
+  mkdirSync(linked);
+  symlinkSync(inApp, join(linked, 'copilot'));
+  const mine = put(join(home, '.local', 'bin', 'copilot'), '', 0o755);
+  const opts = { home, env: { PATH: [join(inApp, '..'), linked].join(':') }, pathDirs: [join(home, '.local', 'bin')], applicationDirs: [] };
+  assert.equal(notTheAgent('copilot', join(linked, 'copilot')), 'app', 'followed through its link');
+  assert.equal(detectAgentInstallation('copilot', opts).cli, mine);
+  assert.equal(detectAgentInstallation('copilot', { ...opts, chosen: join(linked, 'copilot') }).cli, mine, 'chosen, and refused');
+});
+
+test('on Windows a window program (a desktop app) is never an agent; one whose header cannot be read still is', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-pe-'));
+  const app = join(dir, 'app');
+  mkdirSync(app);
+  writeFileSync(join(app, 'kimi.exe'), peProgram(2));
+  assert.equal(notTheAgent('kimi', join(app, 'kimi.exe'), { win: true }), 'app');
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  assert.equal(detectAgentInstallation('kimi', { home, env: { PATH: app }, pathDirs: [], applicationDirs: [], win: true }).cli, null);
+  const cli = join(dir, 'cli');
+  mkdirSync(cli);
+  writeFileSync(join(cli, 'kimi.exe'), peProgram(3));
+  assert.equal(detectAgentInstallation('kimi', { home, env: { PATH: `${app};${cli}` }, pathDirs: [], applicationDirs: [], win: true }).cli, join(cli, 'kimi.exe'));
+  /* a Store app's command cannot be read as a file: it is not refused for that */
+  writeFileSync(join(dir, 'codex.exe'), '');
+  assert.equal(notTheAgent('codex', join(dir, 'codex.exe'), { win: true }), null);
+});
+
+test("Cursor's agent counts only in its own folder (or Homebrew's cursor-cli), whatever it is called", () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const stray = put(join(home, 'bin', 'cursor-agent'), '', 0o755);
+  assert.equal(notTheAgent('cursor', stray), 'not-cursor-agent');
+  assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: '' }, pathDirs: [join(home, 'bin')], applicationDirs: [] }).cli, null);
+  const brew = put(join(home, 'Caskroom', 'cursor-cli', '2026.10.16-e3cb207', 'dist-package', 'cursor-agent'), '', 0o755);
+  const links = join(home, 'brew-bin');
+  mkdirSync(links);
+  symlinkSync(brew, join(links, 'cursor-agent'));
+  assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: '' }, pathDirs: [join(home, 'bin'), links], applicationDirs: [] }).cli, join(links, 'cursor-agent'));
+});
+
+test("Cursor's agent on Windows: found in %LOCALAPPDATA%\\cursor-agent, started by its own shim, which runs its own Node", () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const root = join(home, 'AppData', 'Local', 'cursor-agent');
+  put(join(root, 'versions', '2026.10.16-e3cb207', 'index.js'));
+  put(join(root, 'versions', '2026.10.16-e3cb207', 'node.exe'));
+  const shim = put(join(root, 'agent.cmd'), '@echo off\r\n"%~dp0versions\\2026.10.16-e3cb207\\node.exe" "%~dp0versions\\2026.10.16-e3cb207\\index.js" %*\r\n');
+  assert.equal(cmdTarget(shim), null, 'never its script with another Node');
+  assert.equal(detectAgentInstallation('cursor', { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [], win: true }).cli, shim);
+});
+
+test('Claude Code in the Claude app on Windows: under %APPDATA%\\Claude, or the Store app\'s own copy of it; the newest', () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  assert.equal(claudeAppCli(home, { win: true }), null);
+  const roaming = put(join(home, 'AppData', 'Roaming', 'Claude', 'claude-code', '2.1.290', 'claude.exe'));
+  assert.equal(claudeAppCli(home, { win: true }), roaming);
+  const store = put(join(home, 'AppData', 'Local', 'Packages', 'Claude_pzs8sxrjxfjjc', 'LocalCache', 'Roaming', 'Claude', 'claude-code', '2.1.300', 'b1', 'claude.exe'));
+  assert.equal(claudeAppCli(home, { win: true }), store);
+  assert.equal(claudeVersion(store), '2.1.300');
+  assert.deepEqual(detectAgentInstallation('claude', { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [], win: true }).cli, store);
+});
+
+test("OpenCode inside OpenCode.app: used when it is the only one, or the later than the one on the PATH", () => {
+  if (process.platform === 'win32') return;
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const apps = join(home, 'Applications');
+  const inApp = put(join(apps, 'OpenCode.app', 'Contents', 'Resources', 'opencode-cli'), '', 0o755);
+  writeFileSync(`${inApp}.version`, '2.0.24\n');
+  assert.equal(opencodeVersion(inApp, { ask: () => assert.fail('read from the file beside it') }), '2.0.24');
+  const opts = { home, env: { PATH: '' }, pathDirs: [], applicationDirs: [apps] };
+  assert.deepEqual(detectAgentInstallation('opencode', opts), { installed: true, cli: inApp, source: 'app', install: 'https://opencode.ai/download' });
+  const bin = join(home, 'bin');
+  const onPath = put(join(bin, 'opencode'), '', 0o755);
+  const versions = (map) => (file) => map[file] ?? null;
+  assert.equal(detectAgentInstallation('opencode', { ...opts, pathDirs: [bin], opencodeVersionOf: versions({ [onPath]: '1.0.0', [inApp]: '2.0.24' }) }).cli, inApp);
+  assert.equal(detectAgentInstallation('opencode', { ...opts, pathDirs: [bin], opencodeVersionOf: versions({ [onPath]: '2.1.0', [inApp]: '2.0.24' }) }).cli, onPath);
+  assert.equal(chosenProgram(join(apps, 'OpenCode.app'), { names: ['opencode'] }), inApp, 'the app chosen: the OpenCode inside it');
+  /* npm's says it in its package.json */
+  const pkg = join(home, 'npm', 'node_modules', 'opencode-ai');
+  put(join(pkg, 'package.json'), JSON.stringify({ name: 'opencode-ai', version: '1.4.2' }));
+  assert.equal(opencodeVersion(put(join(pkg, 'bin', 'opencode'))), '1.4.2');
+});
+
+test("the maker's desktop app is told without its agent: by its bundle on a Mac, its folder on Windows; VS Code with Copilot only", () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const apps = join(home, 'Applications');
+  const mac = { home, applicationDirs: [apps], win: false };
+  assert.equal(desktopApp('cursor', mac), null);
+  mkdirSync(join(apps, 'Cursor.app'), { recursive: true });
+  mkdirSync(join(apps, 'CodeBuddy CN.app'));
+  mkdirSync(join(apps, 'Visual Studio Code.app'));
+  assert.equal(desktopApp('cursor', mac), 'Cursor');
+  assert.equal(desktopApp('codebuddy', mac), 'CodeBuddy');
+  assert.equal(desktopApp('kimi', mac), null);
+  assert.equal(desktopApp('copilot', mac), null, 'VS Code without the Copilot extension');
+  mkdirSync(join(home, '.vscode', 'extensions', 'github.copilot-chat-0.30.0'), { recursive: true });
+  assert.equal(desktopApp('copilot', mac), 'VS Code');
+  assert.equal(desktopApp('qwen', mac), null, 'no desktop app');
+  if (process.platform === 'win32') return;
+  const win = { home, applicationDirs: [], win: true };
+  assert.equal(desktopApp('minimax', win), null);
+  mkdirSync(join(home, 'AppData', 'Local', 'Programs', 'MiniMax Agent'), { recursive: true });
+  assert.equal(desktopApp('minimax', win), 'MiniMax');
+  mkdirSync(join(home, 'AppData', 'Local', 'AnthropicClaude'), { recursive: true });
+  assert.equal(desktopApp('claude', win), 'Claude');
+});
+
+test("each official installer: the maker's command for this system, the others none", () => {
+  assert.equal(installCommand('cursor', { win: false }), 'curl https://cursor.com/install -fsS | bash');
+  assert.equal(installCommand('cursor', { win: true }), "irm 'https://cursor.com/install?win32=true' | iex");
+  assert.equal(installCommand('copilot', { win: true }), 'winget install GitHub.Copilot');
+  for (const id of ['codex', 'claude', 'opencode', 'byok']) assert.equal(installCommand(id, { win: false }), null, id);
+  for (const [id, { sh, ps }] of Object.entries(AGENT_INSTALLERS)) {
+    assert.match(sh, /^curl .*https:\/\/\S+.*\| bash$/, id);
+    assert.match(ps, /^(?:irm '?https:\/\/\S+'? \| iex|winget install \S+)$/, id);
+  }
+});
+
+test('the report says which file is not the agent, and why', () => {
+  const home = mkdtempSync(join(tmpdir(), 'of-home-'));
+  const bin = join(home, 'Programs', 'cursor', 'resources', 'app', 'bin');
+  put(join(home, 'Programs', 'cursor', 'resources', 'app', 'out', 'cli.js'));
+  put(join(bin, 'agent.cmd'), editorShim('Cursor.exe'));
+  const report = searchReport('cursor', { home, env: { PATH: bin }, pathDirs: [], win: true });
+  assert.equal(report.files.length, 1);
+  assert.equal(report.files[0].refused, 'app');
+  assert.equal(report.files[0].usable, false);
 });

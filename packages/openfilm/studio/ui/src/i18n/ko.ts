@@ -50,7 +50,7 @@ export const ko: Words = {
   /* the app's update, ready to install (Studio's top bar, in an app that has updates: lib/host.ts `update`) */
   update: {
     restart: '재시작하여 업데이트',
-    ready: 'OpenFilm {version} 준비가 끝났습니다. 지금 재시작하면 설치되고, 아니면 다음에 종료할 때 설치됩니다.',
+    ready: 'OpenFilm {version} 준비가 끝났습니다. 지금 재시작해 업데이트하거나, 종료할 때 자동으로 설치되어 다음에 열면 새 버전이 됩니다.',
     agentBusy: '에이전트가 아직 작업 중입니다. 끝난 뒤 재시작하세요.',
     exporting: '내보내는 중입니다. 끝난 뒤 재시작하세요.',
     installFailed: 'OpenFilm {version}을(를) 설치하지 못했습니다. OpenFilm을 종료했다가 다시 열면 설치됩니다.',
@@ -1578,6 +1578,12 @@ export const ko: Words = {
       chosenAt: '선택한 프로그램 사용 중: {path}',
       automatic: '자동 감지로 되돌리기',
       notAProgram: '이 컴퓨터에서 실행할 수 있는 프로그램이 아닙니다. 에이전트 프로그램 자체를 선택하세요(Windows에서는 .exe 또는 .cmd 파일).',
+      appOnly: '{app} 앱은 설치되어 있지만, 연결하려면 {name}의 명령줄 에이전트가 필요합니다.',
+      installing: '터미널 창에서 설치하는 중… 끝나면 OpenFilm이 찾습니다.',
+      installConfirm: 'OpenFilm이 터미널 창을 열고 {name}의 공식 설치 프로그램을 실행합니다:',
+      installRun: '설치 프로그램 실행',
+      notTheAgentApp: '이것은 편집기나 데스크톱 앱이며, {name}의 명령줄 에이전트가 아닙니다. 연결하려면 {name}의 명령줄 에이전트가 필요합니다.',
+      notCursorAgent: '이것은 Cursor의 명령줄 에이전트가 아닙니다(cursor-agent 폴더에 설치됩니다). 연결하려면 Cursor의 명령줄 에이전트가 필요합니다.',
       didNotStart: '여기서 실행하지 못했습니다:',
       unreadable: '자체 설정을 읽지 못해 시작할 수 없습니다. 설정 파일에서 지적된 부분을 고치거나 업데이트하세요:',
       whyMissing: '왜 찾지 못하나요?',

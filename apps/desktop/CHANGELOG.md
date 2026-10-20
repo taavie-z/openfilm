@@ -1,5 +1,24 @@
 # @openfilm/desktop
 
+## 0.2.2
+
+### Patch Changes
+
+- [#110](https://github.com/openfilm/openfilm/pull/110) [`7d35283`](https://github.com/openfilm/openfilm/commit/7d352837b96754793d7c2e7c1d129656a29cfdba) Thanks [@PazChen](https://github.com/PazChen)! - Desktop: agents work for people who installed only the maker's app: Claude Code and OpenCode from inside their apps, and an Install button that runs the official installer for the others. The Cursor editor is never started in place of Cursor's agent.
+
+- [#97](https://github.com/openfilm/openfilm/pull/97) [`6dd91c4`](https://github.com/openfilm/openfilm/commit/6dd91c4f22fc36788b754f5423a39e11a217e4c2) Thanks [@taavie-z](https://github.com/taavie-z)! - Keep desktop agent names and installation links in one list so Chat and installation discovery stay consistent, preserving existing agent behavior.
+
+- [#106](https://github.com/openfilm/openfilm/pull/106) [`3582b88`](https://github.com/openfilm/openfilm/commit/3582b88e75099d0f9af9f927d5ae042826f5e88b) Thanks [@taavie-z](https://github.com/taavie-z)! - Keep Final Cut Pro subtitles white with a black outline and a soft shadow. Correct Basic Title font scaling so subtitle size stays proportional in low-resolution, 4K and portrait sequences.
+
+- [#100](https://github.com/openfilm/openfilm/pull/100) [`0a528f3`](https://github.com/openfilm/openfilm/commit/0a528f303dae5f6cb9de2d4d15bff971f3f36297) Thanks [@PazChen](https://github.com/PazChen)! - Desktop: when the app's own agent tries a model service again after waiting, the chat says so.
+
+- [#109](https://github.com/openfilm/openfilm/pull/109) [`5f8b70f`](https://github.com/openfilm/openfilm/commit/5f8b70f8a453dc10fe3c86dd103c420473051fab) Thanks [@PazChen](https://github.com/PazChen)! - On macOS, an update that is ready now installs when you quit even if you open OpenFilm again right away. Opened while the update is still being installed, OpenFilm waits for the install to finish and then opens as the new version. If an install did not happen, the next launch installs it in a small window that says so, then opens as the new version. The update notice says what happens when you quit.
+
+- [#109](https://github.com/openfilm/openfilm/pull/109) [`5f8b70f`](https://github.com/openfilm/openfilm/commit/5f8b70f8a453dc10fe3c86dd103c420473051fab) Thanks [@PazChen](https://github.com/PazChen)! - Desktop on Windows: agents start again. The variables read from the registry are expanded as Windows does (REG_EXPAND_SZ ones only) before they are handed on, so Codex finds `cmd.exe` through `ComSpec`.
+
+- Updated dependencies [[`7d35283`](https://github.com/openfilm/openfilm/commit/7d352837b96754793d7c2e7c1d129656a29cfdba), [`f771d05`](https://github.com/openfilm/openfilm/commit/f771d053d31ef28fd0c21ce1ca5e848a632b2954), [`3582b88`](https://github.com/openfilm/openfilm/commit/3582b88e75099d0f9af9f927d5ae042826f5e88b), [`7192264`](https://github.com/openfilm/openfilm/commit/71922644da5d6b67db2cc796d4e057f98999944f), [`bc1ae78`](https://github.com/openfilm/openfilm/commit/bc1ae787dda20a9a7fe3e5b6d3f9aba8863cc2fc), [`94ea4c8`](https://github.com/openfilm/openfilm/commit/94ea4c8237f933866e9ef5a7b41bdca4e64db4e2), [`5f8b70f`](https://github.com/openfilm/openfilm/commit/5f8b70f8a453dc10fe3c86dd103c420473051fab)]:
+  - openfilm@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

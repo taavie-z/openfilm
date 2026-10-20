@@ -51,7 +51,7 @@ export const zhCN: Words = {
   /* the app's update, ready to install (Studio's top bar, in an app that has updates: lib/host.ts `update`) */
   update: {
     restart: '重启以更新',
-    ready: 'OpenFilm {version} 已准备好。现在重启即可安装，或在下次退出时自动安装。',
+    ready: 'OpenFilm {version} 已准备好。现在重启即可更新；或者退出时自动安装，下次打开就是新版本。',
     agentBusy: '智能体还在工作，等它完成后再重启。',
     exporting: '正在导出，导出完成后再重启。',
     installFailed: 'OpenFilm {version} 暂时无法安装。退出 OpenFilm 后重新打开即可安装。',
@@ -1580,6 +1580,12 @@ export const zhCN: Words = {
       chosenAt: '正在使用你选择的程序：{path}',
       automatic: '改回自动检测',
       notAProgram: '这不是这台电脑能启动的程序。请选择智能体程序本身（Windows 上是 .exe 或 .cmd 文件）。',
+      appOnly: '已安装 {app} 应用，但连接需要 {name} 的命令行智能体。',
+      installing: '正在终端窗口中安装… 装好后 OpenFilm 会找到它。',
+      installConfirm: 'OpenFilm 会打开一个终端窗口，运行 {name} 的官方安装命令：',
+      installRun: '运行安装',
+      notTheAgentApp: '这是编辑器或桌面应用，不是 {name} 的命令行智能体。连接需要 {name} 的命令行智能体。',
+      notCursorAgent: '这不是 Cursor 的命令行智能体（它安装在 cursor-agent 文件夹里）。连接需要 Cursor 的命令行智能体。',
       didNotStart: '从这里启动失败：',
       unreadable: '它读不了自己的设置，所以无法启动。请修改它的配置文件里提到的那一项，或更新它：',
       whyMissing: '为什么检测不到？',

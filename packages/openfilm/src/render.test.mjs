@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { getPriority, tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,46 @@ import { filmHtml } from './film-doc.mjs';
 import { defaultWorkers, machine, outOfMemory, render } from './render.mjs';
 
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+
+test('the render command accepts decimal frame rates and still rejects invalid rates', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-fps-options-'));
+  try {
+    const cli = fileURLToPath(new URL('../bin/openfilm.mjs', import.meta.url));
+    for (const fps of ['1', '23.976', '29.97', '59.94', String(30000 / 1001), '240']) {
+      const result = spawnSync(process.execPath, [cli, 'render', `--fps=${fps}`], { cwd: dir, encoding: 'utf8' });
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /is not in a project/, `--fps ${fps} passes option validation`);
+    }
+    for (const fps of ['0', '-1', '0.99', '240.1', 'NaN', 'Infinity']) {
+      const result = spawnSync(process.execPath, [cli, 'render', `--fps=${fps}`], { cwd: dir, encoding: 'utf8' });
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /--fps is a number from 1 to 240/, `--fps ${fps} is rejected`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the render command renders 29.97 as exactly 30000/1001, and keeps another decimal rate, through encoding, blur and parallel parts', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'of-render-fractional-'));
+  try {
+    writeFileSync(join(dir, 'p.html'), '<!doctype html><body style="margin:0"><script>window.film = { duration: 0.5, width: 320, height: 180, frame(t) { document.body.style.background = `hsl(${t * 360}, 80%, 50%)`; } };</script>');
+    writeFileSync(join(dir, 'film.html'), filmHtml({ stage: { w: 320, h: 180 }, tracks: [{ clips: [{ id: 'p', src: 'p.html', at: 0, time: [0, 0.5] }] }] }));
+    mkdirSync(join(dir, '.film'));
+    writeFileSync(join(dir, '.film', 'opened'), '');
+    const cli = fileURLToPath(new URL('../bin/openfilm.mjs', import.meta.url));
+    for (const [fps, rate, workers, samples] of [[29.97, '30000/1001', 1, 1], [30000 / 1001, '30000/1001', 2, 2], [12.5, '25/2', 1, 1]]) {
+      const out = join(dir, `${fps}.mp4`);
+      execFileSync(process.execPath, [cli, 'render', '--fps', String(fps), '--workers', String(workers), '--samples', String(samples), '--out', out], { cwd: dir, timeout: 60_000, stdio: 'pipe' });
+      const { streams: [video] } = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate,avg_frame_rate,nb_read_frames', '-of', 'json', out], { encoding: 'utf8' }));
+      assert.equal(video.r_frame_rate, rate);
+      assert.equal(video.avg_frame_rate, rate);
+      assert.equal(Number(video.nb_read_frames), Math.round(0.5 * fps));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('a render with no format of its own encodes on the graphics chip when it can: H.264 for an MP4, ProRes for a MOV', { skip: !hasFfmpeg && 'no ffmpeg', timeout: 120_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'of-render-chip-'));

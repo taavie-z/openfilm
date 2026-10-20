@@ -50,7 +50,7 @@ export const es: Words = {
   /* the app's update, ready to install (Studio's top bar, in an app that has updates: lib/host.ts `update`) */
   update: {
     restart: 'Reiniciar para actualizar',
-    ready: 'OpenFilm {version} está listo. Reinicia para instalarlo, o se instalará la próxima vez que salgas.',
+    ready: 'OpenFilm {version} está listo. Reinicia para actualizar ahora, o se instalará al salir y la próxima vez se abrirá la nueva versión.',
     agentBusy: 'Un agente sigue trabajando. Reinicia cuando termine.',
     exporting: 'Hay una exportación en curso. Reinicia cuando termine.',
     installFailed: 'No se pudo instalar OpenFilm {version}. Sal de OpenFilm y vuelve a abrirlo para instalarlo.',
@@ -1579,6 +1579,12 @@ export const es: Words = {
       chosenAt: 'Usando el programa que elegiste: {path}',
       automatic: 'Detectarlo automáticamente',
       notAProgram: 'Ese archivo no es un programa que este equipo pueda abrir. Elige el programa del agente (en Windows, el archivo .exe o .cmd).',
+      appOnly: 'La app {app} está instalada, pero para conectar hace falta el agente de línea de comandos de {name}.',
+      installing: 'Instalando en una ventana de terminal… OpenFilm lo encontrará al terminar.',
+      installConfirm: 'OpenFilm abre una ventana de terminal y ejecuta el instalador oficial de {name}:',
+      installRun: 'Ejecutar instalador',
+      notTheAgentApp: 'Esto es un editor o una app de escritorio, no el agente de línea de comandos de {name}. Para conectar hace falta el agente de línea de comandos de {name}.',
+      notCursorAgent: 'Esto no es el agente de línea de comandos de Cursor, que se instala en una carpeta cursor-agent. Para conectar hace falta el agente de línea de comandos de Cursor.',
       didNotStart: 'No se pudo iniciar desde ahí:',
       unreadable: 'No puede leer su propia configuración, así que no puede iniciarse. Corrige lo que indica en su archivo de configuración o actualízalo:',
       whyMissing: '¿Por qué no se encuentra?',

@@ -51,7 +51,7 @@ export const en = {
   /* the app's update, ready to install (Studio's top bar, in an app that has updates: lib/host.ts `update`) */
   update: {
     restart: 'Restart to update',
-    ready: 'OpenFilm {version} is ready. Restart to install it, or it installs the next time you quit.',
+    ready: 'OpenFilm {version} is ready. Restart to update now, or it installs when you quit and opens as the new version next time.',
     agentBusy: 'An agent is still working. Restart when it has finished.',
     exporting: 'An export is running. Restart when it has finished.',
     installFailed: 'OpenFilm {version} could not install. Quit OpenFilm and open it again to install it.',
@@ -1580,6 +1580,12 @@ export const en = {
       chosenAt: 'Using the program you chose: {path}',
       automatic: 'Find it automatically',
       notAProgram: 'That is not a program this computer can start. Choose the agent’s program itself (on Windows, the .exe or .cmd file).',
+      appOnly: 'The {app} app is installed, but connecting needs {name}’s command-line agent.',
+      installing: 'Installing in a terminal window… OpenFilm finds it once it’s done.',
+      installConfirm: 'OpenFilm opens a terminal window and runs {name}’s official installer:',
+      installRun: 'Run installer',
+      notTheAgentApp: 'This is an editor or a desktop app, not {name}’s command-line agent. Connecting needs {name}’s command-line agent.',
+      notCursorAgent: 'This is not Cursor’s command-line agent, which installs in a cursor-agent folder. Connecting needs Cursor’s command-line agent.',
       didNotStart: 'It did not start from there:',
       unreadable: 'It can’t read its own settings, so it can’t start. Fix what it names in its config file, or update it:',
       whyMissing: 'Why isn’t it found?',

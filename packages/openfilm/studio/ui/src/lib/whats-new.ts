@@ -17,6 +17,52 @@ export interface ReleaseNotes { version: string; date: string; notes: Record<Lan
 
 export const RELEASES: readonly ReleaseNotes[] = [
   {
+    version: '0.2.2',
+    date: '2026-10-19',
+    notes: {
+      en: [
+        { kind: 'new', text: 'An export can be named where you choose its folder.' },
+        { kind: 'new', text: 'Agents work when you installed only the maker’s app: Claude Code and OpenCode are found inside their apps, and Settings › Agents installs the others with their official installer.' },
+        { kind: 'improved', text: 'When the app’s own agent tries its model service again, the chat says so. Final Cut Pro subtitles keep their look and size.' },
+        { kind: 'fixed', text: 'On Windows, agents start again: 0.2.1 handed them the path of cmd.exe unexpanded. Connecting Cursor no longer opens the Cursor editor.' },
+        { kind: 'fixed', text: 'On a Mac, an update installs when you quit, even if you open OpenFilm again right away.' },
+        { kind: 'fixed', text: 'openfilm render takes frame rates like 29.97; 4K and transparent WebM footage get their contact sheets; a render that fails on Windows says why.' },
+      ],
+      'zh-CN': [
+        { kind: 'new', text: '导出时可以在选文件夹的地方给文件起名。' },
+        { kind: 'new', text: '只装了官方应用也能用智能体：Claude Code 和 OpenCode 能在它们的应用里找到，其他的在 设置 › 智能体 里用官方安装程序一键安装。' },
+        { kind: 'improved', text: '内置智能体重新请求模型服务时，对话里会提示。Final Cut Pro 字幕保持原来的样式和大小。' },
+        { kind: 'fixed', text: 'Windows 上智能体又能启动了：0.2.1 交给它们的 cmd.exe 路径没有展开。连接 Cursor 不会再打开 Cursor 编辑器。' },
+        { kind: 'fixed', text: 'Mac 上退出时会安装更新，即使你马上又打开 OpenFilm。' },
+        { kind: 'fixed', text: 'openfilm render 支持 29.97 这样的帧率；4K 和透明 WebM 视频也能生成缩略图；Windows 上渲染失败会说明原因。' },
+      ],
+      ja: [
+        { kind: 'new', text: '書き出しのファイル名を、フォルダを選ぶ場所で付けられます。' },
+        { kind: 'new', text: '公式アプリだけを入れていてもエージェントが使えます。Claude Code と OpenCode はそれぞれのアプリの中から見つけ、ほかは設定 › エージェントから公式インストーラーで入れられます。' },
+        { kind: 'improved', text: 'アプリ内蔵のエージェントがモデルサービスに再試行するとき、チャットに表示します。Final Cut Pro の字幕は見た目とサイズを保ちます。' },
+        { kind: 'fixed', text: 'Windows でエージェントが再び起動します。0.2.1 では cmd.exe のパスを展開せずに渡していました。Cursor に接続しても Cursor エディタは開きません。' },
+        { kind: 'fixed', text: 'Mac では終了時にアップデートがインストールされます。すぐに OpenFilm を開き直しても同じです。' },
+        { kind: 'fixed', text: 'openfilm render が 29.97 のようなフレームレートに対応。4K や透過 WebM の映像もコンタクトシートを作れます。Windows で失敗した書き出しは理由を表示します。' },
+      ],
+      ko: [
+        { kind: 'new', text: '내보낼 때 폴더를 고르는 곳에서 파일 이름을 정할 수 있습니다.' },
+        { kind: 'new', text: '공식 앱만 설치해도 에이전트를 쓸 수 있습니다. Claude Code와 OpenCode는 각 앱 안에서 찾고, 나머지는 설정 › 에이전트에서 공식 설치 프로그램으로 설치합니다.' },
+        { kind: 'improved', text: '앱 자체 에이전트가 모델 서비스를 다시 시도하면 채팅에 알려 줍니다. Final Cut Pro 자막은 모양과 크기를 유지합니다.' },
+        { kind: 'fixed', text: 'Windows에서 에이전트가 다시 시작됩니다. 0.2.1은 cmd.exe 경로를 펼치지 않고 넘겼습니다. Cursor를 연결해도 Cursor 편집기가 열리지 않습니다.' },
+        { kind: 'fixed', text: 'Mac에서는 종료할 때 업데이트가 설치됩니다. 바로 OpenFilm을 다시 열어도 마찬가지입니다.' },
+        { kind: 'fixed', text: 'openfilm render가 29.97 같은 프레임 레이트를 받습니다. 4K와 투명 WebM 영상도 콘택트 시트가 만들어지고, Windows에서 실패한 렌더는 이유를 알려 줍니다.' },
+      ],
+      es: [
+        { kind: 'new', text: 'Una exportación se puede nombrar donde eliges su carpeta.' },
+        { kind: 'new', text: 'Los agentes funcionan aunque solo tengas la app de su fabricante: Claude Code y OpenCode se encuentran dentro de sus apps, y Ajustes › Agentes instala los demás con su instalador oficial.' },
+        { kind: 'improved', text: 'Cuando el agente propio de la app reintenta su servicio de modelos, el chat lo dice. Los subtítulos de Final Cut Pro mantienen su aspecto y tamaño.' },
+        { kind: 'fixed', text: 'En Windows los agentes vuelven a arrancar: 0.2.1 les daba la ruta de cmd.exe sin expandir. Conectar Cursor ya no abre el editor Cursor.' },
+        { kind: 'fixed', text: 'En un Mac, una actualización se instala al salir, aunque vuelvas a abrir OpenFilm enseguida.' },
+        { kind: 'fixed', text: 'openfilm render acepta frecuencias como 29.97; el material 4K y los WebM transparentes tienen su hoja de contactos; un render que falla en Windows dice por qué.' },
+      ],
+    },
+  },
+  {
     version: '0.2.1',
     date: '2026-10-19',
     notes: {

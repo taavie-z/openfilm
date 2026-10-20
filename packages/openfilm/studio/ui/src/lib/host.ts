@@ -80,7 +80,8 @@ export interface StudioHost {
    * and returns a way to stop listening. One of the person's own agents, found or not, can be pointed at a program
    * of the person's choosing (`locate`: the system's file dialog, with Studio's words; `{ ok: false }` and no error
    * when cancelled) and set back to being found (`useAutomatic`); `diagnose` says what was searched (an older app
-   * has none of these).
+   * has none of these). One not found that has an official installer (`HostAgent.installer`) can be installed:
+   * `install` runs it in a terminal window, once the person agreed to that command (an older app has none).
    */
   agents?: {
     list: () => Promise<HostAgent[]>;
@@ -89,7 +90,8 @@ export interface StudioHost {
     /** Codex: what is left of its plan, as it says for the account signed in (null: it can't say; other agents, null) */
     usage?: (id: HostAgentId, fresh?: boolean) => Promise<HostAgentUsage | null>;
     setShown: (id: HostAgentId, shown: boolean) => Promise<unknown>;
-    locate?: (id: HostAgentId, words?: { title?: string; button?: string }) => Promise<{ ok: boolean; error?: string; code?: 'not-a-program' | 'did-not-start' | string }>;
+    locate?: (id: HostAgentId, words?: { title?: string; button?: string }) => Promise<{ ok: boolean; error?: string; code?: 'not-a-program' | 'did-not-start' | 'app' | 'not-cursor-agent' | string }>;
+    install?: (id: HostAgentId) => Promise<{ ok: boolean; error?: string }>;
     useAutomatic?: (id: HostAgentId) => Promise<unknown>;
     diagnose?: (id: HostAgentId) => Promise<HostAgentDiagnosis | null>;
     /** The app's part of Settings → Developer's diagnostic report: the app, and each agent's program, version and state, as text. */
@@ -225,6 +227,11 @@ export interface HostAgent {
   install?: string | null;
   /** What installing it takes, when `install` is not a download: 'code-tab', Claude Code comes with the Claude app (its Code tab). */
   setupRequired?: string | null;
+  /** Not installed: the maker's desktop app when only that is here (`Cursor`), and the official command that installs it. */
+  app?: string | null;
+  installer?: string | null;
+  /** Its installer is running in a terminal window: it is looked for again until it is there. */
+  installing?: boolean;
   /** The program used (the person's own agents), and the one the person chose for it, if they did. */
   path?: string | null;
   chosen?: string | null;
